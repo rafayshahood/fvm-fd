@@ -19,8 +19,8 @@ function HomePage() {
     formData.append('video', videoFile);
 
     try {
-      const res = await fetch('http://localhost:8888/run-verification', {
-      // const res = await fetch('https://zkgdtypik7tuea-8888.proxy.runpod.net/run-verification', {
+      // const res = await fetch('http://localhost:8888/run-verification', {
+      const res = await fetch('https://y7rkb1bixsc8ft-8888.proxy.runpod.net/run-verification', {
         method: 'POST',
         body: formData,
       });

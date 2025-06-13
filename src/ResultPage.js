@@ -10,7 +10,9 @@ function ResultPage() {
   const [backendMessage, setBackendMessage] = useState(null);
 
   useEffect(() => {
-    fetch(`http://localhost:8888/temp/${reqId}/result.json`)
+    // fetch(`http://localhost:8888/temp/${reqId}/result.json`)
+    fetch(`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/result.json`)
+
       .then(res => {
         if (!res.ok) throw new Error('Result not ready yet');
         return res.json();
@@ -22,7 +24,9 @@ function ResultPage() {
 
   const handleManualDecision = async (status) => {
     try {
-      const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
+      // const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
+
+      const res = await fetch(`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/manual-review/${reqId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision: status }),
@@ -89,7 +93,8 @@ function ResultPage() {
                         <div className="col-md-6 mb-3">
                           <h6>ID Image</h6>
                           <img
-                            src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
+                            // src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
+                            src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
                             alt="Cropped Face"
                             className="img-fluid border"
                           />
@@ -98,7 +103,9 @@ function ResultPage() {
                           <h6>Uploaded Video</h6>
                           <video
                             controls
-                            src={`http://localhost:8888/temp/${reqId}/video.mp4`}
+                            // src={`http://localhost:8888/temp/${reqId}/video.mp4`}
+                            src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
+
                             className="img-fluid border"
                           />
                         </div>
@@ -123,7 +130,9 @@ function ResultPage() {
                 </>
               ) : (
                 <img
-                  src={`http://localhost:8888/temp/${reqId}/best_match.png`}
+                  // src={`http://localhost:8888/temp/${reqId}/best_match.png`}
+                  src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
+
                   alt="Side by side match"
                   className="img-fluid mt-3"
                 />
