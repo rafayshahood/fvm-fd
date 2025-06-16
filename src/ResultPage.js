@@ -8,10 +8,11 @@ function ResultPage() {
   const [loading, setLoading] = useState(true);
   const [decision, setDecision] = useState(null);
   const [backendMessage, setBackendMessage] = useState(null);
+  
 
   useEffect(() => {
     // fetch(`http://localhost:8888/temp/${reqId}/result.json`)
-    fetch(`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/result.json`)
+    fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/result.json`)
 
       .then(res => {
         if (!res.ok) throw new Error('Result not ready yet');
@@ -26,7 +27,7 @@ function ResultPage() {
     try {
       // const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
 
-      const res = await fetch(`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/manual-review/${reqId}`, {
+      const res = await fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/manual-review/${reqId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision: status }),
@@ -77,7 +78,7 @@ function ResultPage() {
               <p><strong>Average Score:</strong> {result.average_score}</p>
               <p><strong>Status:</strong> {result.status}</p>
 
-              {result.status === '🟡 Needs Manual Review' ? (
+              {result.status === 'Needs Manual Review' ? (
                 <>
                   {decision ? (
                     <div className="alert alert-success mt-3">
@@ -94,7 +95,7 @@ function ResultPage() {
                           <h6>ID Image</h6>
                           <img
                             // src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
-                            src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
+                            src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
                             alt="Cropped Face"
                             className="img-fluid border"
                           />
@@ -104,7 +105,7 @@ function ResultPage() {
                           <video
                             controls
                             // src={`http://localhost:8888/temp/${reqId}/video.mp4`}
-                            src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
+                            src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
 
                             className="img-fluid border"
                           />
@@ -131,7 +132,7 @@ function ResultPage() {
               ) : (
                 <img
                   // src={`http://localhost:8888/temp/${reqId}/best_match.png`}
-                  src={`https://y7rkb1bixsc8ft-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
+                  src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
 
                   alt="Side by side match"
                   className="img-fluid mt-3"
