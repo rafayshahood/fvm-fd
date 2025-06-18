@@ -11,8 +11,8 @@ function ResultPage() {
   
 
   useEffect(() => {
-    // fetch(`http://localhost:8888/temp/${reqId}/result.json`)
-    fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/result.json`)
+    fetch(`http://localhost:8888/temp/${reqId}/result.json`)
+    // fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/result.json`)
 
       .then(res => {
         if (!res.ok) throw new Error('Result not ready yet');
@@ -25,9 +25,9 @@ function ResultPage() {
 
   const handleManualDecision = async (status) => {
     try {
-      // const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
+      const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
 
-      const res = await fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/manual-review/${reqId}`, {
+      // const res = await fetch(`https://gb0en19dwrvo4t-8888.proxy.runpod.net/manual-review/${reqId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision: status }),
@@ -67,15 +67,15 @@ function ResultPage() {
                   </thead>
                   <tbody>
                     {result.all_scores.map(([f, s], i) => (
-                      <tr key={i}><td>{f}</td><td>{s}</td></tr>
+                      <tr key={i}><td>{f}</td><td>{s}%</td></tr>
                     ))}
                   </tbody>
                 </table>
               )}
 
               <p><strong>File:</strong> {result.best_match}</p>
-              <p><strong>Score:</strong> {result.score}</p>
-              <p><strong>Average Score:</strong> {result.average_score}</p>
+              <p><strong>Score:</strong> {result.score}%</p>
+              <p><strong>Average Score:</strong> {result.average_score}%</p>
               <p><strong>Status:</strong> {result.status}</p>
 
               {result.status === 'Needs Manual Review' ? (
@@ -94,8 +94,8 @@ function ResultPage() {
                         <div className="col-md-6 mb-3">
                           <h6>ID Image</h6>
                           <img
-                            // src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
-                            src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
+                            src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
+                            // src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
                             alt="Cropped Face"
                             className="img-fluid border"
                           />
@@ -104,8 +104,8 @@ function ResultPage() {
                           <h6>Uploaded Video</h6>
                           <video
                             controls
-                            // src={`http://localhost:8888/temp/${reqId}/video.mp4`}
-                            src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
+                            src={`http://localhost:8888/temp/${reqId}/video.mp4`}
+                            // src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
 
                             className="img-fluid border"
                           />
@@ -131,8 +131,8 @@ function ResultPage() {
                 </>
               ) : (
                 <img
-                  // src={`http://localhost:8888/temp/${reqId}/best_match.png`}
-                  src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
+                  src={`http://localhost:8888/temp/${reqId}/best_match.png`}
+                  // src={`https://gb0en19dwrvo4t-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
 
                   alt="Side by side match"
                   className="img-fluid mt-3"

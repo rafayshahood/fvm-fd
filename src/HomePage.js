@@ -4,9 +4,14 @@ import { useNavigate } from 'react-router-dom';
 function HomePage() {
   const [documentFile, setDocumentFile] = useState(null);
   const [videoFile, setVideoFile] = useState(null);
-  const [verifiedBest, setVerifiedBest] = useState(0.58);
-  const [verifiedAvg, setVerifiedAvg] = useState(0.53);
-  const [manualAvgMin, setManualAvgMin] = useState(0.38);
+
+  const [verifiedBest, setVerifiedBest] = useState(58);   
+  const [verifiedAvg, setVerifiedAvg] = useState(53);    
+  const [manualAvgMin, setManualAvgMin] = useState(38);   
+
+  // const [verifiedBest, setVerifiedBest] = useState(0.58);
+  // const [verifiedAvg, setVerifiedAvg] = useState(0.53);
+  // const [manualAvgMin, setManualAvgMin] = useState(0.38);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -25,8 +30,8 @@ function HomePage() {
     formData.append('manual_avg_min', manualAvgMin);
 
     try {
-      // const res = await fetch('http://localhost:8888/run-verification', {
-      const res = await fetch('https://gb0en19dwrvo4t-8888.proxy.runpod.net/run-verification', {
+      const res = await fetch('http://localhost:8888/run-verification', {
+      // const res = await fetch('https://gb0en19dwrvo4t-8888.proxy.runpod.net/run-verification', {
         method: 'POST',
         body: formData,
       });
@@ -77,24 +82,52 @@ function HomePage() {
                 onChange={(e) => setVideoFile(e.target.files[0])}
               />
             </div>
+
             <div className="mb-3">
             <label className="form-label">Verified Thresholds</label>
             <div className="row">
               <div className="col">
-                <input type="number" step="0.01" className="form-control"
-                  value={verifiedBest} onChange={(e) => setVerifiedBest(e.target.value)} placeholder="Best Match (e.g. 0.58)" />
+                <div className="input-group">
+                  <input
+                    type="number"
+                    step="1"
+                    className="form-control"
+                    value={verifiedBest}
+                    onChange={(e) => setVerifiedBest(e.target.value)}
+                    placeholder="Best Match (e.g. 58)"
+                  />
+                  <span className="input-group-text">%</span>
+                </div>
               </div>
               <div className="col">
-                <input type="number" step="0.01" className="form-control"
-                  value={verifiedAvg} onChange={(e) => setVerifiedAvg(e.target.value)} placeholder="Average Score (e.g. 0.53)" />
+                <div className="input-group">
+                  <input
+                    type="number"
+                    step="1"
+                    className="form-control"
+                    value={verifiedAvg}
+                    onChange={(e) => setVerifiedAvg(e.target.value)}
+                    placeholder="Average Score (e.g. 53)"
+                  />
+                  <span className="input-group-text">%</span>
+                </div>
               </div>
             </div>
           </div>
 
           <div className="mb-4">
             <label className="form-label">Manual Review Min Avg</label>
-            <input type="number" step="0.01" className="form-control"
-              value={manualAvgMin} onChange={(e) => setManualAvgMin(e.target.value)} placeholder="Min Avg (e.g. 0.38)" />
+            <div className="input-group">
+              <input
+                type="number"
+                step="1"
+                className="form-control"
+                value={manualAvgMin}
+                onChange={(e) => setManualAvgMin(e.target.value)}
+                placeholder="Min Avg (e.g. 38)"
+              />
+              <span className="input-group-text">%</span>
+            </div>
           </div>
             <button type="submit" className="btn btn-primary w-100">Submit</button>
           </form>
