@@ -5,9 +5,9 @@ function HomePage() {
   const [documentFile, setDocumentFile] = useState(null);
   const [videoFile, setVideoFile] = useState(null);
 
-  const [verifiedBest, setVerifiedBest] = useState(58);   
-  const [verifiedAvg, setVerifiedAvg] = useState(53);    
-  const [manualAvgMin, setManualAvgMin] = useState(38);   
+  const [verifiedBest, setVerifiedBest] = useState(32);   
+  const [verifiedAvg, setVerifiedAvg] = useState(32);    
+  const [manualAvgMin, setManualAvgMin] = useState(24);   
 
   // const [verifiedBest, setVerifiedBest] = useState(0.58);
   // const [verifiedAvg, setVerifiedAvg] = useState(0.53);
@@ -30,8 +30,8 @@ function HomePage() {
     formData.append('manual_avg_min', manualAvgMin);
 
     try {
-      const res = await fetch('http://localhost:8888/run-verification', {
-      // const res = await fetch('https://gb0en19dwrvo4t-8888.proxy.runpod.net/run-verification', {
+      // const res = await fetch('http://localhost:8888/run-verification', {
+      const res = await fetch('https://n8y79as14brhq5-8888.proxy.runpod.net/run-verification', {
         method: 'POST',
         body: formData,
       });
