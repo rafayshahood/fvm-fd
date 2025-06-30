@@ -12,7 +12,7 @@ function ResultPage() {
 
   useEffect(() => {
     // fetch(`http://localhost:8888/temp/${reqId}/result.json`)
-    fetch(`https://n8y79as14brhq5-8888.proxy.runpod.net/temp/${reqId}/result.json`)
+    fetch(`https://h1edrlkvetkm3j-8888.proxy.runpod.net/temp/${reqId}/result.json`)
 
       .then(res => {
         if (!res.ok) throw new Error('Result not ready yet');
@@ -27,7 +27,7 @@ function ResultPage() {
     try {
       // const res = await fetch(`http://localhost:8888/manual-review/${reqId}`, {
 
-      const res = await fetch(`https://n8y79as14brhq5-8888.proxy.runpod.net/manual-review/${reqId}`, {
+      const res = await fetch(`https://h1edrlkvetkm3j-8888.proxy.runpod.net/manual-review/${reqId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision: status }),
@@ -64,7 +64,7 @@ function ResultPage() {
                   <h6>ID Image</h6>
                   <img
                     // src={`http://localhost:8888/temp/${reqId}/cropped_face.png`}
-                    src={`https://n8y79as14brhq5-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
+                    src={`https://h1edrlkvetkm3j-8888.proxy.runpod.net/temp/${reqId}/cropped_face.png`}
 
                     alt="Cropped Face"
                     className="img-fluid border"
@@ -75,7 +75,7 @@ function ResultPage() {
                   <video
                     controls
                     // src={`http://localhost:8888/temp/${reqId}/video.mp4`}
-                    src={`https://n8y79as14brhq5-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
+                    src={`https://h1edrlkvetkm3j-8888.proxy.runpod.net/temp/${reqId}/video.mp4`}
 
                     className="img-fluid border"
                   />
@@ -126,7 +126,7 @@ function ResultPage() {
 
               <img
                 // src={`http://localhost:8888/temp/${reqId}/best_match.png`}
-                src={`https://n8y79as14brhq5-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
+                src={`https://h1edrlkvetkm3j-8888.proxy.runpod.net/temp/${reqId}/best_match.png`}
                 
                 alt="Side by side match"
                 className="img-fluid mt-3"

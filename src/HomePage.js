@@ -31,7 +31,7 @@ function HomePage() {
 
     try {
       // const res = await fetch('http://localhost:8888/run-verification', {
-      const res = await fetch('https://n8y79as14brhq5-8888.proxy.runpod.net/run-verification', {
+      const res = await fetch('https://h1edrlkvetkm3j-8888.proxy.runpod.net/run-verification', {
         method: 'POST',
         body: formData,
       });
