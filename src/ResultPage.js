@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 
 // const API_ORIGIN = 'http://localhost:8888';
-const API_ORIGIN = 'https://l9oh95v75xp0on-8888.proxy.runpod.net';
+const API_ORIGIN = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
 
 
 const abs = (u) => (u ? (u.startsWith('http') ? u : `${API_ORIGIN}${u}`) : null);

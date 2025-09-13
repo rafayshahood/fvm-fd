@@ -16,7 +16,7 @@ function HomePage() {
   async function bootstrapSession() {
     try {
       // const res = await fetch('http://localhost:8888/session/start', {
-      const res = await fetch('https://l9oh95v75xp0on-8888.proxy.runpod.net/session/start', {
+      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/session/start', {
         method: 'POST',
         credentials: 'include',
       });
@@ -32,7 +32,7 @@ function HomePage() {
   async function refreshState() {
     try {
       // const res = await fetch('http://localhost:8888/session/state', {
-      const res = await fetch('https://l9oh95v75xp0on-8888.proxy.runpod.net/session/state', {
+      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/session/state', {
         credentials: 'include',
       });
       const data = await res.json();
@@ -69,7 +69,7 @@ function HomePage() {
     setSubmitting(true);
     try {
       // const res = await fetch('http://localhost:8888/verify-session', {
-      const res = await fetch('https://l9oh95v75xp0on-8888.proxy.runpod.net/verify-session', {
+      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/verify-session', {
         method: 'POST',
         credentials: 'include',
       });
