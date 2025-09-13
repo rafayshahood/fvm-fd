@@ -122,7 +122,10 @@ function LiveIDVerification() {
 
       const sid = await ensureSession();
     //   const ws = new WebSocket(`ws://localhost:8888/ws-id-live?sid=${sid || ""}`);
-      const ws = new WebSocket(`ws://l9oh95v75xp0on-8888.proxy.runpod.net/ws-id-live?sid=${sid || ""}`);
+    //   const ws = new WebSocket(`ws://l9oh95v75xp0on-8888.proxy.runpod.net/ws-id-live?sid=${sid || ""}`);
+      const ws = new WebSocket(
+      `wss://l9oh95v75xp0on-8888.proxy.runpod.net/ws-id-live?sid=${encodeURIComponent(sid || "")}`
+       );
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
