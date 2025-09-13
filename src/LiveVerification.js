@@ -2,6 +2,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
+const WS_BASE  = API_BASE.startsWith('https')
+  ? API_BASE.replace('https', 'wss')
+  : API_BASE.replace('http', 'ws');
+
+function getReqId() { return localStorage.getItem('req_id') || null; }
+async function ensureReqId() {
+  let rid = getReqId();
+  if (!rid) {
+    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
+    const data = await res.json();
+    rid = data?.req_id;
+    if (rid) localStorage.setItem('req_id', rid);
+  }
+  return rid;
+}
+
 function LiveVerification() {
   const navigate = useNavigate();
 
@@ -10,14 +27,14 @@ function LiveVerification() {
   const wsRef = useRef(null);
   const startedRef = useRef(false);
 
-  // --- Recording refs/state ---
+  // Recording
   const recRef = useRef(null);
   const chunksRef = useRef([]);
   const stableStartRef = useRef(null);
   const recordingStartRef = useRef(null);
-  const abortingRef = useRef(false); // distinguish abort vs normal stop
+  const abortingRef = useRef(false);
 
-  const sendTickRef = useRef(0); // sending every Nth frame
+  const sendTickRef = useRef(0);
 
   // Timeouts & countdown
   const timeoutIdRef = useRef(null);
@@ -26,11 +43,11 @@ function LiveVerification() {
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
-  const STABLE_REQUIRED_MS = 1000;     // must be stable for 1s to start recording
-  const RECORD_TARGET_MS = 8000;       // single 8s capture
-  const SEND_FRAME_INTERVAL_MS = 80;   // ~12.5fps canvas sampling
-  const SEND_EVERY_NTH_FRAME = 5;      // send only every 5th frame to backend
-  const TIMEOUT_TOTAL_MS = 30000;      // hard cap (30s) — shows countdown, silent redirect
+  const STABLE_REQUIRED_MS = 1000;
+  const RECORD_TARGET_MS = 8000;
+  const SEND_FRAME_INTERVAL_MS = 80;
+  const SEND_EVERY_NTH_FRAME = 5;
+  const TIMEOUT_TOTAL_MS = 30000;
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
@@ -51,27 +68,12 @@ function LiveVerification() {
   const ellipseRy = (vp.h * 0.7) / 2;
   const bannerTop = Math.max(16, ellipseCy - ellipseRy - 60);
 
-  // ensure cookie session exists (optional)
-  useEffect(() => {
-    (async () => {
-      try {
-        // await fetch("http://localhost:8888/session/start", {
-        await fetch("https://zmjdegdfastnee-8888.proxy.runpod.net/session/start", {
-          method: "POST",
-          credentials: "include",
-        });
-      } catch {}
-    })();
-  }, []);
-
   function cleanup() {
-    // stop WS first (so backend stops reading)
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       try { wsRef.current.close(); } catch {}
     }
     wsRef.current = null;
 
-    // stop recording
     if (recRef.current) {
       try { recRef.current.stop(); } catch {}
       recRef.current = null;
@@ -80,7 +82,6 @@ function LiveVerification() {
     recordingStartRef.current = null;
     abortingRef.current = false;
 
-    // stop camera
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -90,15 +91,8 @@ function LiveVerification() {
       videoRef.current.srcObject = null;
     }
 
-    // clear timers
-    if (timeoutIdRef.current) {
-      clearTimeout(timeoutIdRef.current);
-      timeoutIdRef.current = null;
-    }
-    if (countdownIdRef.current) {
-      clearInterval(countdownIdRef.current);
-      countdownIdRef.current = null;
-    }
+    if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+    if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
     sessionEndAtRef.current = null;
     setRemainingMs(null);
 
@@ -106,7 +100,6 @@ function LiveVerification() {
   }
 
   function handleTimeout() {
-    // Silent timeout: cleanup + redirect home
     cleanup();
     navigate("/", { replace: true });
     setTimeout(() => {
@@ -117,7 +110,6 @@ function LiveVerification() {
   function startCountdown() {
     sessionEndAtRef.current = performance.now() + TIMEOUT_TOTAL_MS;
     setRemainingMs(TIMEOUT_TOTAL_MS);
-
     countdownIdRef.current = setInterval(() => {
       const left = Math.max(0, sessionEndAtRef.current - performance.now());
       setRemainingMs(left);
@@ -128,12 +120,12 @@ function LiveVerification() {
     if (startedRef.current) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
-
-    // 30s timeout (silent) + visible countdown
     timeoutIdRef.current = setTimeout(handleTimeout, TIMEOUT_TOTAL_MS);
     startCountdown();
 
     try {
+      await ensureReqId();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
         audio: false,
@@ -153,9 +145,7 @@ function LiveVerification() {
       v.addEventListener("canplay", () => setStatus("Camera ready"));
       v.addEventListener("play", () => setStatus("Streaming…"));
 
-    //   const ws = new WebSocket("ws://localhost:8888/ws-live-verification");
-    const ws = new WebSocket("ws://zmjdegdfastnee-8888.proxy.runpod.net/ws-live-verification");
-      
+      const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
         safeSend(ws, JSON.stringify({ ellipseCx, ellipseCy, ellipseRx, ellipseRy }));
@@ -167,25 +157,15 @@ function LiveVerification() {
           const data = JSON.parse(evt.data);
           setResult(data);
 
-          // Respect backend flags:
           const enabled = data?.checks || {
-            face: true,
-            ellipse: true,
-            brightness: true,
-            spoof: true,
-            glasses: true,
+            face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
           };
-
           const passIfEnabled = (flag, condition) => (flag ? !!condition : true);
-
           const allGood =
             passIfEnabled(enabled.face,       data?.face_detected === true) &&
             passIfEnabled(enabled.ellipse,    data?.inside_ellipse === true) &&
             passIfEnabled(enabled.brightness, data?.brightness_status === "ok") &&
-            passIfEnabled(
-              enabled.glasses,
-              data?.glasses_detected === false || data?.glasses_detected === undefined
-            ) &&
+            passIfEnabled(enabled.glasses,    data?.glasses_detected !== true) &&
             passIfEnabled(enabled.spoof,      data?.spoof_is_real !== false);
 
           const now = performance.now();
@@ -200,9 +180,7 @@ function LiveVerification() {
             }
             if (isRecording && recordingStartRef.current) {
               const recElapsed = now - recordingStartRef.current;
-              if (recElapsed >= RECORD_TARGET_MS) {
-                stopRecording(); // normal completion → will upload
-              }
+              if (recElapsed >= RECORD_TARGET_MS) stopRecording();
             }
 
             if (recRef.current) {
@@ -212,10 +190,9 @@ function LiveVerification() {
               setStatus(`Stable — starting soon… ${(Math.min(100, (stableFor / STABLE_REQUIRED_MS) * 100)).toFixed(0)}%`);
             }
           } else {
-            // Conditions broke → discard current segment (if any) and keep camera open
             stableStartRef.current = null;
             if (recRef.current) {
-              abortRecording(); // do NOT navigate or cleanup; just drop the segment
+              abortRecording();
               setStatus(`Recording aborted`);
             }
           }
@@ -227,7 +204,6 @@ function LiveVerification() {
     } catch (err) {
       startedRef.current = false;
       setStatus(err?.message || "Camera unavailable. Check permissions.");
-      // clear timers if we failed to start
       if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
       if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
       setRemainingMs(null);
@@ -244,21 +220,17 @@ function LiveVerification() {
       if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
         requestAnimationFrame(loop); return;
       }
-
-      // draw current frame into a canvas sized to viewport
       const cw = vp.w || window.innerWidth, ch = vp.h || window.innerHeight;
       const canvas = document.createElement("canvas"); canvas.width = cw; canvas.height = ch;
       const ctx = canvas.getContext("2d");
       const vidW = v.videoWidth, vidH = v.videoHeight;
-      const scale = Math.max(cw / vidW, ch / vidH); // cover
+      const scale = Math.max(cw / vidW, ch / vidH);
       const drawW = vidW * scale, drawH = vidH * scale;
       const dx = (cw - drawW) / 2, dy = (ch - drawH) / 2;
       ctx.save(); ctx.translate(cw, 0); ctx.scale(-1, 1); ctx.drawImage(v, dx, dy, drawW, drawH); ctx.restore();
 
-      // Re-send ellipse params occasionally (cheap + robust)
       if (Math.random() < 0.02) safeSend(ws, JSON.stringify({ ellipseCx, ellipseCy, ellipseRx, ellipseRy }));
 
-      // send only every Nth sampled frame
       sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
       if (sendTickRef.current === 0) {
         const b64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
@@ -271,7 +243,6 @@ function LiveVerification() {
     return () => { stop = true; };
   }
 
-  // ---- MediaRecorder (single 8s segment) ----
   function startRecording() {
     if (recRef.current || !streamRef.current) return;
     chunksRef.current = [];
@@ -281,15 +252,12 @@ function LiveVerification() {
 
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
     mr.onstop = async () => {
-      // If we aborted, just discard the buffered chunks and return (no upload, no navigation)
       if (abortingRef.current) {
         chunksRef.current = [];
         abortingRef.current = false;
         recordingStartRef.current = null;
         return;
       }
-
-      // Normal completion → upload
       const blob = new Blob(chunksRef.current, { type: "video/webm" });
       chunksRef.current = [];
       await uploadSingle(blob);
@@ -311,28 +279,28 @@ function LiveVerification() {
 
   function abortRecording() {
     if (!recRef.current) return;
-    abortingRef.current = true;    // mark abort so onstop discards
+    abortingRef.current = true;
     try { recRef.current.stop(); } catch {}
     recRef.current = null;
-    // NOTE: do NOT clear chunks here; let onstop clear to avoid races
     stableStartRef.current = null;
   }
 
   async function uploadSingle(blob) {
     try {
+      const reqId = getReqId();
+      if (!reqId) throw new Error("No request id. Refresh the page.");
+
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
-      const res = await fetch("https://zmjdegdfastnee-8888.proxy.runpod.net/upload-live-clip", {
+      const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
         body: form,
-        credentials: "include",
       });
 
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
-      // Done with this screen — cleanup and go home (successful capture)
       cleanup();
       navigate("/", { replace: true });
       setTimeout(() => {
@@ -344,38 +312,21 @@ function LiveVerification() {
     }
   }
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup();
-    };
-  }, []);
+  useEffect(() => () => { cleanup(); }, []);
 
-  // Guidance respects backend flags too
   const guidance = (() => {
     if (!result) return "Click Start Camera to begin";
     const enabled = result?.checks || {
-      face: true,
-      ellipse: true,
-      brightness: true,
-      spoof: true,
-      glasses: true,
+      face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
     };
 
-    if (enabled.brightness && result.brightness_status === "too_dark")
-      return "💡 Lighting too low — move to a brighter place.";
-    if (enabled.brightness && result.brightness_status === "too_bright")
-      return "☀️ Lighting too strong — reduce direct light.";
-    if (enabled.face && !result.face_detected)
-      return "❌ No face detected.";
-    if (enabled.face && result.num_faces > 1)
-      return "👥 Multiple faces detected — only you should be in the frame.";
-    if (enabled.glasses && result.glasses_detected === true)
-      return "🕶️ Please remove glasses.";
-    if (enabled.ellipse && !result.inside_ellipse)
-      return "🎯 Please bring your face fully inside the oval.";
-    if (enabled.spoof && result.spoof_is_real === false)
-      return "🔒 Possible spoof detected — show your live face clearly.";
+    if (enabled.brightness && result.brightness_status === "too_dark")   return "💡 Lighting too low — move to a brighter place.";
+    if (enabled.brightness && result.brightness_status === "too_bright") return "☀️ Lighting too strong — reduce direct light.";
+    if (enabled.face && !result.face_detected)                           return "❌ No face detected.";
+    if (enabled.face && result.num_faces > 1)                            return "👥 Multiple faces detected — only you should be in the frame.";
+    if (enabled.glasses && result.glasses_detected === true)             return "🕶️ Please remove glasses.";
+    if (enabled.ellipse && !result.inside_ellipse)                       return "🎯 Please bring your face fully inside the oval.";
+    if (enabled.spoof && result.spoof_is_real === false)                 return "🔒 Possible spoof detected — show your live face clearly.";
     return recRef.current ? "🎬 Recording… hold steady." : "✅ Perfect — hold steady.";
   })();
 
@@ -396,7 +347,6 @@ function LiveVerification() {
         <ellipse cx={ellipseCx} cy={ellipseCy} rx={ellipseRx} ry={ellipseRy} fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6"/>
       </svg>
 
-      {/* Guidance banner */}
       <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
         <div style={{ maxWidth: 680, width: "100%", textAlign: "center", background: "rgba(0,0,0,0.6)", color: "#fff",
                       borderRadius: 12, padding: "10px 14px", fontSize: 16, backdropFilter: "blur(4px)" }}>
@@ -404,7 +354,6 @@ function LiveVerification() {
         </div>
       </div>
 
-      {/* Countdown pill (visible) */}
       {remainingSec != null && (
         <div className="position-absolute" style={{ top: 16, right: 16 }}>
           <div style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 14 }}>
@@ -413,9 +362,8 @@ function LiveVerification() {
         </div>
       )}
 
-      {/* Bottom controls + tiny status */}
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
-        <button className="btn btn-success" onClick={startCamera}>Start Camera</button>
+        <button className="btn btn.success" onClick={startCamera}>Start Camera</button>
         <div className="text-light text-center" style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
           {status}
           {result?.skipped ? " | (fast mode)" : ""}

@@ -2,15 +2,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 
-// const API_ORIGIN = 'http://localhost:8888';
-const API_ORIGIN = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
-
-
-const abs = (u) => (u ? (u.startsWith('http') ? u : `${API_ORIGIN}${u}`) : null);
+const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
+const abs = (u) => (u ? (u.startsWith('http') ? u : `${API_BASE}${u}`) : null);
 
 function ResultPage() {
-  const { reqId } = useParams();
+  const { reqId: reqIdFromRoute } = useParams();
   const navigate = useNavigate();
+
+  // prefer route param, else fall back to localStorage (just in case)
+  const effectiveReqId = reqIdFromRoute || localStorage.getItem('req_id') || '';
 
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -27,7 +27,7 @@ function ResultPage() {
   const pct = (x) => (typeof x === 'number' ? Math.round(x * 1000) / 10 : x);
   const stopPollingRef = useRef(false);
 
-  // Helper: apply URLs from result or review bundle
+  // Apply URLs from result or review bundle
   const applyAssetUrls = (bundle) => {
     if (!bundle) return;
     const idUrl = abs(bundle.id_image_url) || abs(bundle.cropped_face_url) || null;
@@ -36,24 +36,28 @@ function ResultPage() {
     setVideoSrc(vidUrl);
   };
 
-  // Poll result.json written by backend
+  // Poll result.json written by backend (no cookies)
   useEffect(() => {
+    if (!effectiveReqId) {
+      setError('Missing request id. Please run verification again.');
+      return;
+    }
     stopPollingRef.current = false;
 
     const poll = async () => {
-      const url = `${API_ORIGIN}/temp/${reqId}/result.json`;
+      const url = `${API_BASE}/temp/${effectiveReqId}/result.json`;
 
       let tries = 0;
       const maxTries = 90; // ~3 minutes @ 2s
       while (!stopPollingRef.current && tries < maxTries) {
         try {
-          const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
+          const res = await fetch(url, { cache: 'no-store' });
           if (res.ok) {
             const data = await res.json();
             setResult(data);
             setError(null);
 
-            // Normalize media URLs from result payload
+            // normalize media URLs from result payload
             applyAssetUrls({
               id_image_url: data?.id_image_url,
               cropped_face_url: data?.cropped_face_url,
@@ -62,7 +66,7 @@ function ResultPage() {
             return; // stop polling
           }
           setError(null);
-        } catch (e) {
+        } catch (_) {
           setError(null);
         }
 
@@ -80,37 +84,33 @@ function ResultPage() {
     return () => {
       stopPollingRef.current = true;
     };
-  }, [reqId]);
+  }, [effectiveReqId]);
 
   // If manual review and asset URLs are missing, fetch the review bundle
   useEffect(() => {
     const needsManual =
       result?.status?.includes('Manual Review') || result?.status?.startsWith('🟡');
 
-    const missingAssets =
-      needsManual && (!idImgSrc || !videoSrc);
+    const missingAssets = needsManual && (!idImgSrc || !videoSrc);
 
-    if (needsManual && missingAssets) {
+    if (needsManual && missingAssets && effectiveReqId) {
       (async () => {
         try {
-          const res = await fetch(`${API_ORIGIN}/review/${reqId}`, {
-            credentials: 'include',
-            cache: 'no-store',
-          });
+          const res = await fetch(`${API_BASE}/review/${effectiveReqId}`, { cache: 'no-store' });
           if (res.ok) {
             const bundle = await res.json();
             applyAssetUrls(bundle);
           }
         } catch (_) {
-          // ignore; UI already has fallbacks
+          /* ignore; UI has fallbacks */
         }
       })();
     }
-  }, [result, idImgSrc, videoSrc, reqId]);
+  }, [result, idImgSrc, videoSrc, effectiveReqId]);
 
   const handleManualDecision = async (status) => {
     try {
-      const res = await fetch(`${API_ORIGIN}/manual-review/${reqId}`, {
+      const res = await fetch(`${API_BASE}/manual-review/${effectiveReqId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision: status }),
@@ -124,14 +124,9 @@ function ResultPage() {
     }
   };
 
-  // Start a fresh session, then go home
+  // Fresh run: clear the current req_id and go home; Home will mint a new one
   const resetAndGoHome = async () => {
-    try {
-      await fetch(`${API_ORIGIN}/session/reset`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-    } catch (_) {}
+    try { localStorage.removeItem('req_id'); } catch (_) {}
     navigate('/');
   };
 
@@ -174,15 +169,12 @@ function ResultPage() {
     );
   }
 
-  // Fallback helpers for media errors
+  // Fallbacks for media errors
   const onIdImgError = () => {
-    const fallback = `${API_ORIGIN}/temp/${reqId}/id/cropped_id_face.jpg`;
+    const fallback = `${API_BASE}/temp/${effectiveReqId}/id/cropped_id_face.jpg`;
     if (idImgSrc !== fallback) setIdImgSrc(fallback);
   };
-
-  const onVideoError = () => {
-    setShowVideo(false);
-  };
+  const onVideoError = () => setShowVideo(false);
 
   return (
     <div className="container-fluid bg-light min-vh-100">
@@ -198,9 +190,7 @@ function ResultPage() {
             <>
               <h4 className="mb-3">Manual Review Required</h4>
 
-              {result?.error && (
-                <div className="alert alert-warning">{result.error}</div>
-              )}
+              {result?.error && <div className="alert alert-warning">{result.error}</div>}
 
               <div className="row mt-3">
                 <div className="col-md-6 mb-3">
@@ -227,9 +217,7 @@ function ResultPage() {
                       onError={onVideoError}
                     />
                   ) : (
-                    <div className="text-muted small mt-2">
-                      (Video preview unavailable)
-                    </div>
+                    <div className="text-muted small mt-2">(Video preview unavailable)</div>
                   )}
                 </div>
               </div>
@@ -243,11 +231,7 @@ function ResultPage() {
                 </button>
               </div>
 
-              {decision && (
-                <div className="alert alert-success mt-3">
-                  ✅ {backendMessage}
-                </div>
-              )}
+              {decision && <div className="alert alert-success mt-3">✅ {backendMessage}</div>}
             </>
           ) : result?.error ? (
             <>
@@ -283,13 +267,12 @@ function ResultPage() {
               <p><strong>Status:</strong> {result.status}</p>
 
               <img
-                src={abs(result?.best_match_url) || `${API_ORIGIN}/temp/${reqId}/best_match.png`}
+                src={abs(result?.best_match_url) || `${API_BASE}/temp/${effectiveReqId}/best_match.png`}
                 alt="Side by side match"
                 className="img-fluid mt-3"
-                onError={(e) => { e.currentTarget.src = `${API_ORIGIN}/temp/${reqId}/best_match.png`; }}
+                onError={(e) => { e.currentTarget.src = `${API_BASE}/temp/${effectiveReqId}/best_match.png`; }}
               />
 
-              {/* Selected frames grid */}
               {Array.isArray(result?.selected_frames) && result.selected_frames.length > 0 && (
                 <>
                   <h6 className="mt-4">Selected frames</h6>

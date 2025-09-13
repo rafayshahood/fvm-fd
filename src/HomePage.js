@@ -1,6 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 
+const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
+// const API_BASE = 'http://localhost:8888/verify-session'
+
+const WS_BASE  = API_BASE.startsWith('https')
+  ? API_BASE.replace('https', 'wss')
+  : API_BASE.replace('http', 'ws');
+
+function getReqId() {
+  return localStorage.getItem('req_id') || null;
+}
+async function ensureReqId() {
+  let rid = getReqId();
+  if (!rid) {
+    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
+    const data = await res.json();
+    rid = data?.req_id;
+    if (rid) localStorage.setItem('req_id', rid);
+  }
+  return rid;
+}
+
 function HomePage() {
   const [verifiedBest, setVerifiedBest] = useState(32);
   const [verifiedAvg, setVerifiedAvg] = useState(32);
@@ -10,44 +31,33 @@ function HomePage() {
   const [videoVerified, setVideoVerified] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
-
   const navigate = useNavigate();
 
-  async function bootstrapSession() {
+  async function bootstrap() {
     try {
-      // const res = await fetch('http://localhost:8888/session/start', {
-      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/session/start', {
-        method: 'POST',
-        credentials: 'include',
-      });
-      const data = await res.json();
-      const st = data?.state || {};
-      setIdVerified(!!st.id_verified);
-      setVideoVerified(!!st.video_verified);
+      const rid = await ensureReqId();
+      if (!rid) return;
+      await refreshState();
     } catch (e) {
-      console.error('Session bootstrap failed', e);
+      console.error('bootstrap failed', e);
     }
   }
 
   async function refreshState() {
     try {
-      // const res = await fetch('http://localhost:8888/session/state', {
-      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/session/state', {
-        credentials: 'include',
-      });
+      const rid = getReqId();
+      if (!rid) return;
+      const res = await fetch(`${API_BASE}/req/state/${rid}`);
       const data = await res.json();
       const st = data?.state || {};
       setIdVerified(!!st.id_verified);
       setVideoVerified(!!st.video_verified);
     } catch (e) {
-      console.error('Session refresh failed', e);
+      console.error('state refresh failed', e);
     }
   }
 
-  useEffect(() => {
-    bootstrapSession();
-  }, []);
-
+  useEffect(() => { bootstrap(); }, []);
   useEffect(() => {
     const onFocus = () => refreshState();
     window.addEventListener('focus', onFocus);
@@ -60,18 +70,16 @@ function HomePage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
+    const rid = getReqId();
+    if (!rid) { alert('No request id. Refresh the page.'); return; }
     if (!idVerified || !videoVerified) {
       alert('Please complete ID and Video verification first.');
       return;
     }
-
     setSubmitting(true);
     try {
-      // const res = await fetch('http://localhost:8888/verify-session', {
-      const res = await fetch('https://zmjdegdfastnee-8888.proxy.runpod.net/verify-session', {
+      const res = await fetch(`${API_BASE}/verify-session?req_id=${encodeURIComponent(rid)}`, {
         method: 'POST',
-        credentials: 'include',
       });
       const data = await res.json();
       if (!data.ok) {
@@ -97,27 +105,11 @@ function HomePage() {
       </div>
 
       <div className="d-flex justify-content-center" style={{ marginTop: '5%' }}>
-        <div
-          className="card shadow p-4"
-          style={{ width: '100%', maxWidth: '520px', position: 'relative' }}
-          aria-busy={cardDisabled}
-        >
-          {/* Overlay while submitting */}
+        <div className="card shadow p-4" style={{ width: '100%', maxWidth: '520px', position: 'relative' }} aria-busy={cardDisabled}>
           {submitting && (
-            <div
-              style={{
-                position: 'absolute',
-                inset: 0,
-                background: 'rgba(255,255,255,0.8)',
-                zIndex: 10,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexDirection: 'column',
-                gap: '12px',
-                borderRadius: '0.5rem'
-              }}
-            >
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(255,255,255,0.8)', zIndex: 10,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          flexDirection: 'column', gap: '12px', borderRadius: '0.5rem' }}>
               <div className="spinner-border" role="status" aria-hidden="true" />
               <div className="fw-semibold">Submitting… Verifying, please wait</div>
             </div>
@@ -125,8 +117,8 @@ function HomePage() {
 
           <h4 className="text-center mb-4">Verification</h4>
 
-          {/* Document ID */}
           <fieldset disabled={cardDisabled}>
+            {/* Document ID */}
             <div className="mb-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <label className="form-label mb-0">Document ID</label>
@@ -136,9 +128,7 @@ function HomePage() {
                   </span>
                 )}
               </div>
-              <Link to="/live-id" className="btn btn-primary w-100">
-                Verify ID
-              </Link>
+              <Link to="/live-id" className="btn btn-primary w-100">Verify ID</Link>
             </div>
 
             {/* Video */}
@@ -161,9 +151,7 @@ function HomePage() {
                 Verify Video
               </Link>
 
-              {!idVerified && (
-                <div className="form-text mt-1">Complete ID verification first to enable this.</div>
-              )}
+              {!idVerified && <div className="form-text mt-1">Complete ID verification first to enable this.</div>}
             </div>
 
             {/* Thresholds (UI only) */}
@@ -173,23 +161,17 @@ function HomePage() {
                 <div className="row">
                   <div className="col">
                     <div className="input-group">
-                      <input
-                        type="number" step="1" className="form-control"
+                      <input type="number" step="1" className="form-control"
                         value={verifiedBest} onChange={(e) => setVerifiedBest(e.target.value)}
-                        placeholder="Best Match (e.g. 58)"
-                        disabled={cardDisabled}
-                      />
+                        placeholder="Best Match (e.g. 58)" disabled={cardDisabled}/>
                       <span className="input-group-text">%</span>
                     </div>
                   </div>
                   <div className="col">
                     <div className="input-group">
-                      <input
-                        type="number" step="1" className="form-control"
+                      <input type="number" step="1" className="form-control"
                         value={verifiedAvg} onChange={(e) => setVerifiedAvg(e.target.value)}
-                        placeholder="Average Score (e.g. 53)"
-                        disabled={cardDisabled}
-                      />
+                        placeholder="Average Score (e.g. 53)" disabled={cardDisabled}/>
                       <span className="input-group-text">%</span>
                     </div>
                   </div>
@@ -199,28 +181,20 @@ function HomePage() {
               <div className="mb-4">
                 <label className="form-label">Manual Review Min Avg</label>
                 <div className="input-group">
-                  <input
-                    type="number" step="1" className="form-control"
+                  <input type="number" step="1" className="form-control"
                     value={manualAvgMin} onChange={(e) => setManualAvgMin(e.target.value)}
-                    placeholder="Min Avg (e.g. 38)"
-                    disabled={cardDisabled}
-                  />
+                    placeholder="Min Avg (e.g. 38)" disabled={cardDisabled}/>
                   <span className="input-group-text">%</span>
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className={`btn w-100 ${idVerified && videoVerified ? 'btn-primary' : 'btn-secondary'}`}
-                disabled={!(idVerified && videoVerified) || cardDisabled}
-              >
+              <button type="submit" className={`btn w-100 ${idVerified && videoVerified ? 'btn-primary' : 'btn-secondary'}`}
+                      disabled={!(idVerified && videoVerified) || cardDisabled}>
                 {cardDisabled ? 'Submitting…' : 'Submit for Verification'}
               </button>
 
               {!(idVerified && videoVerified) && !cardDisabled && (
-                <div className="form-text mt-2">
-                  Complete ID and Video verification to submit.
-                </div>
+                <div className="form-text mt-2">Complete ID and Video verification to submit.</div>
               )}
             </form>
           </fieldset>

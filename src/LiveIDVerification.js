@@ -2,6 +2,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
+const WS_BASE  = API_BASE.startsWith('https')
+  ? API_BASE.replace('https', 'wss')
+  : API_BASE.replace('http', 'ws');
+
+function getReqId() { return localStorage.getItem('req_id') || null; }
+async function ensureReqId() {
+  let rid = getReqId();
+  if (!rid) {
+    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
+    const data = await res.json();
+    rid = data?.req_id;
+    if (rid) localStorage.setItem('req_id', rid);
+  }
+  return rid;
+}
+
 function LiveIDVerification() {
   const navigate = useNavigate();
 
@@ -15,7 +32,7 @@ function LiveIDVerification() {
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ---------- STABILITY / HYSTERESIS (unchanged) ----------
+  // ---------- STABILITY / HYSTERESIS ----------
   const BRIGHT_STREAK = 12;
   const FRAME_COOLDOWN_MS = 1200;
   const FRAME_OK_MIN = 60,  FRAME_OK_MAX = 190;
@@ -52,15 +69,12 @@ function LiveIDVerification() {
   const rectX = (vp.w - rectW) / 2, rectY = (vp.h - rectH) / 2;
   const bannerTop = Math.max(16, rectY - 60);
 
-  // --- cover layout helpers ---
   function coverLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0 };
     const scale = Math.max(containerW / vidW, containerH / vidH);
     const dispW = vidW * scale, dispH = vidH * scale;
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2 };
   }
-
-  // Map a video-space bbox to screen (for drawing debug boxes)
   function mapBoxToScreen(b) {
     if (!b || !videoRef.current) return null;
     const arr = Array.isArray(b) ? b : [];
@@ -71,8 +85,6 @@ function LiveIDVerification() {
     const { scale, dx, dy } = coverLayout(vp.w, vp.h, vw, vh);
     return { x: dx + x1 * scale, y: dy + y1 * scale, w: (x2 - x1) * scale, h: (y2 - y1) * scale };
   }
-
-  // NEW: Map the on-screen capture rectangle back to **video pixel** ROI
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
     const v = videoRef.current;
     if (!v) return null;
@@ -89,24 +101,17 @@ function LiveIDVerification() {
     return { x: Math.round(x1), y: Math.round(y1), w, h };
   }
 
-  // ---------- SESSION / CAMERA ----------
-  const ensureSession = async () => {
-    // const res = await fetch("http://localhost:8888/session/start", { method: "POST", credentials: "include" });
-    const res = await fetch("https://zmjdegdfastnee-8888.proxy.runpod.net/session/start", { method: "POST", credentials: "include" });
-
-    const data = await res.json();
-    return data?.sid;
-  };
-
   async function startCamera() {
     if (startedRef.current) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
 
     try {
+      const reqId = await ensureReqId();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          facingMode: { ideal: "environment" },           // back cam if possible
+          facingMode: { ideal: "environment" },
           width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 }
         },
         audio: false,
@@ -120,12 +125,7 @@ function LiveIDVerification() {
         v.play().catch(() => {}); setCameraOn(true);
       });
 
-      const sid = await ensureSession();
-    //   const ws = new WebSocket(`ws://localhost:8888/ws-id-live?sid=${sid || ""}`);
-    //   const ws = new WebSocket(`ws://zmjdegdfastnee-8888.proxy.runpod.net/ws-id-live?sid=${sid || ""}`);
-      const ws = new WebSocket(
-      `wss://zmjdegdfastnee-8888.proxy.runpod.net/ws-id-live?sid=${encodeURIComponent(sid || "")}`
-       );
+      const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
@@ -153,33 +153,31 @@ function LiveIDVerification() {
         const b64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
         if (b64) { try { ws.send(b64); } catch {} }
       }
-      setTimeout(() => requestAnimationFrame(loop), 100); // ~10fps
+      setTimeout(() => requestAnimationFrame(loop), 100);
     };
     requestAnimationFrame(loop);
     return () => { stop = true; };
   }
 
-  // NEW: Capture only the ROI inside the on-screen rectangle (native pixels)
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
+      const reqId = getReqId();
+      if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      // 1) Map overlay rect (screen) → video pixel ROI
       const roi = mapScreenRectToVideoRect(rectX, rectY, rectW, rectH);
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // Optional: enforce a decent minimum width (avoid tiny crops)
-      const MIN_W = 900; // tweak as you like
+      const MIN_W = 900;
       if (w < MIN_W) {
         alert("Please move closer so the ID fills the rectangle.");
         setIsUploading(false);
         return;
       }
 
-      // 2) Draw *native* frame once, then crop ROI w/o rescaling
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
       full.getContext("2d").drawImage(v, 0, 0, full.width, full.height);
@@ -187,23 +185,19 @@ function LiveIDVerification() {
       const crop = document.createElement("canvas");
       crop.width = w; crop.height = h;
       const cctx = crop.getContext("2d");
-      // drawImage(sourceCanvas, sx, sy, sw, sh, dx, dy, dw, dh) — here dw=sw, dh=sh (no resample)
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
-      // 3) Export at high quality (no extra downscale)
       const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
 
-      // 4) Upload ROI only
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
-    //   const resp = await fetch("http://localhost:8888/upload-id-still", {
-      const resp = await fetch("https://zmjdegdfastnee-8888.proxy.runpod.net/upload-id-still", {
-        method: "POST", body: form, credentials: "include"
+
+      const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
+        method: "POST", body: form
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // 5) Cleanup & go home
       if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
@@ -227,7 +221,7 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // ---------- STABILIZATION PIPELINE (unchanged) ----------
+  // ---------- STABILIZATION PIPELINE ----------
   useEffect(() => {
     if (!result) return;
 
@@ -235,7 +229,7 @@ function LiveIDVerification() {
     let frameOk = false;
     if (frameMean != null) {
       if (frameSmoothRef.current == null) frameSmoothRef.current = frameMean;
-      else frameSmoothRef.current = alpha * frameMean + (1 - alpha) * frameSmoothRef.current;
+      else frameSmoothRef.current = 0.25 * frameMean + 0.75 * frameSmoothRef.current;
       const m = frameSmoothRef.current;
       const prevOk = streaksRef.current.fr_b > 0;
       frameOk = prevOk ? (m >= FRAME_FAIL_MIN && m <= FRAME_FAIL_MAX)
@@ -250,7 +244,7 @@ function LiveIDVerification() {
     let faceBrightOk = false;
     if (faceMean != null) {
       if (faceSmoothRef.current == null) faceSmoothRef.current = faceMean;
-      else faceSmoothRef.current = alpha * faceMean + (1 - alpha) * faceSmoothRef.current;
+      else faceSmoothRef.current = 0.25 * faceMean + 0.75 * faceSmoothRef.current;
       const fm = faceSmoothRef.current;
       const prevFaceOk = streaksRef.current.face_b > 0;
       faceBrightOk = prevFaceOk ? (fm >= FACE_FAIL_MIN && fm <= FACE_FAIL_MAX)
@@ -285,7 +279,6 @@ function LiveIDVerification() {
   const canCapture = frameBrightStable && facePresentStable && idCardStable &&
                      insideStable && faceBrightStable && glareStable;
 
-  // ---------- GUIDANCE ----------
   const guidance = (() => {
     if (!frameBrightStable) {
       const lbl = result?.brightness_status;
