@@ -34,6 +34,10 @@ function LiveVerification() {
   const recordingStartRef = useRef(null);
   const abortingRef = useRef(false);
 
+  // NEW: prevent double uploads / races
+  const hasUploadedRef = useRef(false);
+  const uploadingRef = useRef(false);
+
   const sendTickRef = useRef(0);
 
   // Timeouts & countdown
@@ -170,7 +174,7 @@ function LiveVerification() {
 
           const now = performance.now();
 
-          if (allGood) {
+          if (allGood && !uploadingRef.current && !hasUploadedRef.current) {
             if (!stableStartRef.current) stableStartRef.current = now;
             const stableFor = now - stableStartRef.current;
             const isRecording = !!recRef.current;
@@ -244,7 +248,7 @@ function LiveVerification() {
   }
 
   function startRecording() {
-    if (recRef.current || !streamRef.current) return;
+    if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current) return;
     chunksRef.current = [];
     let mr;
     try { mr = new MediaRecorder(streamRef.current, { mimeType: "video/webm;codecs=vp9" }); }
@@ -258,9 +262,17 @@ function LiveVerification() {
         recordingStartRef.current = null;
         return;
       }
+      if (hasUploadedRef.current) { // extra guard
+        chunksRef.current = [];
+        recordingStartRef.current = null;
+        return;
+      }
       const blob = new Blob(chunksRef.current, { type: "video/webm" });
       chunksRef.current = [];
+      uploadingRef.current = true;
+      hasUploadedRef.current = true;
       await uploadSingle(blob);
+      uploadingRef.current = false;
       recordingStartRef.current = null;
     };
 
@@ -363,7 +375,10 @@ function LiveVerification() {
       )}
 
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
-        <button className="btn btn.success" onClick={startCamera}>Start Camera</button>
+        {/* FIX: correct Bootstrap class */}
+        <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current}>
+          {startedRef.current ? 'Camera Started' : 'Start Camera'}
+        </button>
         <div className="text-light text-center" style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
           {status}
           {result?.skipped ? " | (fast mode)" : ""}

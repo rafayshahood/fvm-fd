@@ -2,11 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 
 const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
-// const API_BASE = 'http://localhost:8888/verify-session'
-
-const WS_BASE  = API_BASE.startsWith('https')
-  ? API_BASE.replace('https', 'wss')
-  : API_BASE.replace('http', 'ws');
 
 function getReqId() {
   return localStorage.getItem('req_id') || null;
@@ -23,6 +18,7 @@ async function ensureReqId() {
 }
 
 function HomePage() {
+  // UI-only knobs (not sent to backend here)
   const [verifiedBest, setVerifiedBest] = useState(32);
   const [verifiedAvg, setVerifiedAvg] = useState(32);
   const [manualAvgMin, setManualAvgMin] = useState(24);
@@ -47,7 +43,7 @@ function HomePage() {
     try {
       const rid = getReqId();
       if (!rid) return;
-      const res = await fetch(`${API_BASE}/req/state/${rid}`);
+      const res = await fetch(`${API_BASE}/req/state/${rid}`, { cache: 'no-store' });
       const data = await res.json();
       const st = data?.state || {};
       setIdVerified(!!st.id_verified);
