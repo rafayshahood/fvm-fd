@@ -91,7 +91,9 @@ function LiveIDVerification() {
 
   // ---------- SESSION / CAMERA ----------
   const ensureSession = async () => {
-    const res = await fetch("http://localhost:8888/session/start", { method: "POST", credentials: "include" });
+    // const res = await fetch("http://localhost:8888/session/start", { method: "POST", credentials: "include" });
+    const res = await fetch("https://l9oh95v75xp0on-8888.proxy.runpod.net/session/start", { method: "POST", credentials: "include" });
+
     const data = await res.json();
     return data?.sid;
   };
@@ -119,7 +121,8 @@ function LiveIDVerification() {
       });
 
       const sid = await ensureSession();
-      const ws = new WebSocket(`ws://localhost:8888/ws-id-live?sid=${sid || ""}`);
+    //   const ws = new WebSocket(`ws://localhost:8888/ws-id-live?sid=${sid || ""}`);
+      const ws = new WebSocket(`ws://l9oh95v75xp0on-8888.proxy.runpod.net/ws-id-live?sid=${sid || ""}`);
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
@@ -190,7 +193,8 @@ function LiveIDVerification() {
       // 4) Upload ROI only
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
-      const resp = await fetch("http://localhost:8888/upload-id-still", {
+    //   const resp = await fetch("http://localhost:8888/upload-id-still", {
+      const resp = await fetch("https://l9oh95v75xp0on-8888.proxy.runpod.net/upload-id-still", {
         method: "POST", body: form, credentials: "include"
       });
       const data = await resp.json();

@@ -55,7 +55,8 @@ function LiveVerification() {
   useEffect(() => {
     (async () => {
       try {
-        await fetch("http://localhost:8888/session/start", {
+        // await fetch("http://localhost:8888/session/start", {
+        await fetch("https://l9oh95v75xp0on-8888.proxy.runpod.net/session/start", {
           method: "POST",
           credentials: "include",
         });
@@ -152,7 +153,9 @@ function LiveVerification() {
       v.addEventListener("canplay", () => setStatus("Camera ready"));
       v.addEventListener("play", () => setStatus("Streaming…"));
 
-      const ws = new WebSocket("ws://localhost:8888/ws-live-verification");
+    //   const ws = new WebSocket("ws://localhost:8888/ws-live-verification");
+    const ws = new WebSocket("ws://l9oh95v75xp0on-8888.proxy.runpod.net/ws-live-verification");
+      
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
         safeSend(ws, JSON.stringify({ ellipseCx, ellipseCy, ellipseRx, ellipseRy }));
@@ -320,7 +323,7 @@ function LiveVerification() {
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
-      const res = await fetch("http://localhost:8888/upload-live-clip", {
+      const res = await fetch("https://l9oh95v75xp0on-8888.proxy.runpod.net/upload-live-clip", {
         method: "POST",
         body: form,
         credentials: "include",
