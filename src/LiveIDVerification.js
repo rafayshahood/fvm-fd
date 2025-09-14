@@ -48,40 +48,59 @@ function LiveIDVerification() {
   // ---------- VIEWPORT / OVERLAY ----------
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
-    h: typeof window !== "undefined" ? window.innerHeight : 0,
+    h: typeof window !== "undefined"
+      ? (window.visualViewport?.height ?? window.innerHeight)
+      : 0,
   });
   useEffect(() => {
-    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => setVp({
+      w: window.innerWidth,
+      h: window.visualViewport?.height ?? window.innerHeight,
+    });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
   }, []);
-  const rectW = vp.w * 0.9, rectH = vp.h * 0.3;
-  const rectX = (vp.w - rectW) / 2, rectY = (vp.h - rectH) / 2;
-  const bannerTop = Math.max(16, rectY - 60);
 
-  function coverLayout(containerW, containerH, vidW, vidH) {
-    if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0 };
-    const scale = Math.max(containerW / vidW, containerH / vidH);
-    const dispW = vidW * scale, dispH = vidH * scale;
-    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2 };
+  // Layout helpers — use CONTAIN so nothing is cropped visually
+  function containLayout(containerW, containerH, vidW, vidH) {
+    if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
+    const scale = Math.min(containerW / vidW, containerH / vidH);
+    const dispW = vidW * scale;
+    const dispH = vidH * scale;
+    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
+
+  // The ID rectangle is sized/centered within the DISPLAYED video area
+  function currentDisplayRect() {
+    const v = videoRef.current;
+    if (!v) return null;
+    const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
+    if (!vw || !vh) return null;
+    const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
+    const rectW = dispW * 0.9, rectH = dispH * 0.3;
+    const rectX = dx + (dispW - rectW) / 2;
+    const rectY = dy + (dispH - rectH) / 2;
+    return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
+  }
+
   function mapBoxToScreen(b) {
-    if (!b || !videoRef.current) return null;
-    const arr = Array.isArray(b) ? b : [];
-    if (arr.length !== 4) return null;
-    const [x1, y1, x2, y2] = arr.map(Number);
-    const vw = videoRef.current.videoWidth || 0;
-    const vh = videoRef.current.videoHeight || 0;
-    const { scale, dx, dy } = coverLayout(vp.w, vp.h, vw, vh);
+    const v = videoRef.current;
+    if (!v || !b || !Array.isArray(b) || b.length !== 4) return null;
+    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
+    if (!vw || !vh) return null;
+    const [x1, y1, x2, y2] = b.map(Number);
     return { x: dx + x1 * scale, y: dy + y1 * scale, w: (x2 - x1) * scale, h: (y2 - y1) * scale };
   }
+
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
     const v = videoRef.current;
     if (!v) return null;
-    const vw = v.videoWidth || 0;
-    const vh = v.videoHeight || 0;
+    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
     if (!vw || !vh) return null;
-    const { scale, dx, dy } = coverLayout(vp.w, vp.h, vw, vh);
     const x1 = Math.max(0, Math.min(vw, (sx - dx) / scale));
     const y1 = Math.max(0, Math.min(vh, (sy - dy) / scale));
     const x2 = Math.max(0, Math.min(vw, (sx + sw - dx) / scale));
@@ -99,13 +118,12 @@ function LiveIDVerification() {
     try {
       const reqId = await ensureReqId(API_BASE);
 
+      // ⬇️ Minimal constraints: take exactly what the browser/hardware gives
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: "environment" },
-        //   width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 }
-        },
+        video: { facingMode: { ideal: "environment" } },
         audio: false,
       });
+
       streamRef.current = stream;
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.playsInline = true;
@@ -118,7 +136,6 @@ function LiveIDVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => {
         setStatus("WS connected, streaming frames…");
-        // reset grace counters
         cameraStartAtRef.current = Date.now();
         framesSeenRef.current = 0;
       };
@@ -127,7 +144,7 @@ function LiveIDVerification() {
       ws.onmessage = (evt) => {
         try {
           setResult(JSON.parse(evt.data));
-          framesSeenRef.current += 1; // count frames for judgment readiness
+          framesSeenRef.current += 1;
         } catch {}
       };
       wsRef.current = ws;
@@ -146,6 +163,7 @@ function LiveIDVerification() {
       const v = videoRef.current, ws = wsRef.current;
       if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
       if (v.videoWidth && v.videoHeight) {
+        // Send the RAW sensor frame (no forced resizing)
         const canvas = document.createElement("canvas");
         canvas.width = v.videoWidth; canvas.height = v.videoHeight;
         const ctx = canvas.getContext("2d");
@@ -167,11 +185,15 @@ function LiveIDVerification() {
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
+      const disp = currentDisplayRect();
+      if (!disp) throw new Error("Camera not ready");
+      const { rectX, rectY, rectW, rectH } = disp;
+
       const roi = mapScreenRectToVideoRect(rectX, rectY, rectW, rectH);
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // Require the ID ROI to fill >=55% of camera width (mobile-friendly)
+      // Keep your existing proximity rule (55% of camera width)
       const MIN_RATIO = 0.55;
       const vw = v.videoWidth || 0;
       const minW = Math.round(vw * MIN_RATIO);
@@ -181,6 +203,7 @@ function LiveIDVerification() {
         return;
       }
 
+      // Create full-frame canvas (raw) then crop ROI
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
       full.getContext("2d").drawImage(v, 0, 0, full.width, full.height);
@@ -224,17 +247,16 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // ---------- STABILIZATION PIPELINE ----------
+  // ---------- STABILIZATION PIPELINE (unchanged) ----------
   useEffect(() => {
     if (!result) return;
 
-    // Only judge after grace period and a few frames
     const readyToJudge =
       cameraOn &&
       framesSeenRef.current >= JUDGE_MIN_FRAMES &&
       Date.now() - cameraStartAtRef.current >= JUDGE_GRACE_MS;
 
-    if (!readyToJudge) return; // skip building streaks during warm-up
+    if (!readyToJudge) return;
 
     const frameMean = typeof result.brightness_mean === "number" ? result.brightness_mean : null;
     let frameOk = false;
@@ -265,7 +287,7 @@ function LiveIDVerification() {
 
     const faceOk   = !!result.face_detected;
     const idOk     = result.id_card_detected === true;
-    const insideOk = result.inside_rect === true || result.id_inside_rect === true; // tolerate either key
+    const insideOk = result.inside_rect === true || result.id_inside_rect === true;
     const glareClr = !result.glare_detected;
 
     streaksRef.current.fr_b   = frameOk      ? streaksRef.current.fr_b + 1   : 0;
@@ -280,7 +302,6 @@ function LiveIDVerification() {
   const frameCooldownActive = now - lastFrameBrightFailAtRef.current < FRAME_COOLDOWN_MS;
   const faceCooldownActive  = now - lastFaceBrightFailAtRef.current  < FACE_COOLDOWN_MS;
 
-  // Ready check for messaging
   const readyToJudge =
     cameraOn &&
     framesSeenRef.current >= JUDGE_MIN_FRAMES &&
@@ -297,13 +318,10 @@ function LiveIDVerification() {
                      insideStable && faceBrightStable && glareStable;
 
   const guidance = (() => {
-    // Pre-camera
     if (!cameraOn) return "Tap “Start Camera” to begin.";
-    // Warm-up neutral messages
     if (!result) return "Initializing camera…";
     if (!readyToJudge) return "Checking lighting…";
 
-    // Normal gated guidance
     if (!frameBrightStable) {
       const lbl = result?.brightness_status;
       if (lbl === "too_dark")   return "💡 Image too dark — adjust lighting.";
@@ -325,36 +343,46 @@ function LiveIDVerification() {
     return "✅ You can capture now.";
   })();
 
+  // Boxes mapped to the displayed video area
   const rawBox     = mapBoxToScreen(result?.largest_bbox);
-  const tightBox   = mapBoxToScreen(result?.tight_bbox);
   const idCardBox  = mapBoxToScreen(result?.id_card_bbox);
 
-  return (
-    <div className="position-relative" style={{ width:"100vw", height:"100vh", overflow:"hidden", background:"#000" }}>
-      <video ref={videoRef} autoPlay muted playsInline
-             style={{ position:"absolute", inset:0, width:"100vw", height:"100vh", objectFit:"cover" }} />
+  // Display rect (hole) only when video is ready to avoid odd masking
+  const disp = currentDisplayRect();
+  const showMask = cameraOn && disp;
 
-      <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
-           style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-        <defs>
-          <mask id="rect-cutout">
-            <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
-            <rect x={rectX} y={rectY} width={rectW} height={rectH} rx="12" ry="12" fill="black" />
-          </mask>
-        </defs>
-        <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-        <rect x={rectX} y={rectY} width={rectW} height={rectH}
-              rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
-        {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
-                          fill="none" stroke="#ffd54f" strokeWidth="3" />}
-        {tightBox &&<rect x={tightBox.x} y={tightBox.y} width={tightBox.w} height={tightBox.h}
-                          fill="none" stroke="#00e5ff" strokeWidth="2" strokeDasharray="4 3" />}
-        {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                            fill="none" stroke="#34c759" strokeWidth="3" />}
-      </svg>
+  return (
+    <div className="position-relative"
+         style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
+      <video ref={videoRef} autoPlay muted playsInline
+             style={{
+               position:"absolute", inset:0, width:"100%", height:"100%",
+               objectFit:"contain"  // show full sensor, no cropping
+             }} />
+
+      {showMask && (
+        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
+             style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+          <defs>
+            <mask id="rect-cutout">
+              <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
+              <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                    rx="12" ry="12" fill="black" />
+            </mask>
+          </defs>
+          <rect x="0" y="0" width={vp.w} height={vp.h}
+                fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
+          <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
+          {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
+                            fill="none" stroke="#ffd54f" strokeWidth="3" />}
+          {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
+                              fill="none" stroke="#34c759" strokeWidth="3" />}
+        </svg>
+      )}
 
       <div className="position-absolute w-100 d-flex justify-content-center"
-           style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
+           style={{ top: Math.max(16, (disp ? disp.rectY : 0) - 60), left: 0, padding: "0 16px" }}>
         <div style={{
           maxWidth: 680, width: "100%", textAlign: "center",
           background: "rgba(0,0,0,0.6)", color: "#fff",
