@@ -1,23 +1,8 @@
 // LiveVerification.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-
-const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
-const WS_BASE  = API_BASE.startsWith('https')
-  ? API_BASE.replace('https', 'wss')
-  : API_BASE.replace('http', 'ws');
-
-function getReqId() { return localStorage.getItem('req_id') || null; }
-async function ensureReqId() {
-  let rid = getReqId();
-  if (!rid) {
-    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
-    const data = await res.json();
-    rid = data?.req_id;
-    if (rid) localStorage.setItem('req_id', rid);
-  }
-  return rid;
-}
+import { API_BASE, WS_BASE } from "./api";
+import { ensureReqId, getReqId } from "./storage";
 
 function LiveVerification() {
   const navigate = useNavigate();
@@ -128,7 +113,7 @@ function LiveVerification() {
     startCountdown();
 
     try {
-      await ensureReqId();
+      await ensureReqId(API_BASE);
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
@@ -262,7 +247,7 @@ function LiveVerification() {
         recordingStartRef.current = null;
         return;
       }
-      if (hasUploadedRef.current) { // extra guard
+      if (hasUploadedRef.current) {
         chunksRef.current = [];
         recordingStartRef.current = null;
         return;
@@ -375,7 +360,6 @@ function LiveVerification() {
       )}
 
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
-        {/* FIX: correct Bootstrap class */}
         <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current}>
           {startedRef.current ? 'Camera Started' : 'Start Camera'}
         </button>

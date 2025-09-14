@@ -1,16 +1,20 @@
 // resultpage.js
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { API_BASE } from './api';
 
-const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
 const abs = (u) => (u ? (u.startsWith('http') ? u : `${API_BASE}${u}`) : null);
 
 function ResultPage() {
   const { reqId: reqIdFromRoute } = useParams();
   const navigate = useNavigate();
 
-  // prefer route param, else fall back to localStorage (just in case)
-  const effectiveReqId = reqIdFromRoute || localStorage.getItem('req_id') || '';
+  // prefer route param, else fall back to sessionStorage (then legacy localStorage)
+  const effectiveReqId =
+    reqIdFromRoute ||
+    (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('req_id')) ||
+    (typeof localStorage !== 'undefined' && localStorage.getItem('req_id')) ||
+    '';
 
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -27,7 +31,6 @@ function ResultPage() {
   const pct = (x) => (typeof x === 'number' ? Math.round(x * 1000) / 10 : x);
   const stopPollingRef = useRef(false);
 
-  // Apply URLs from result or review bundle
   const applyAssetUrls = (bundle) => {
     if (!bundle) return;
     const idUrl = abs(bundle.id_image_url) || abs(bundle.cropped_face_url) || null;
@@ -36,7 +39,6 @@ function ResultPage() {
     setVideoSrc(vidUrl);
   };
 
-  // Poll result.json written by backend (no cookies)
   useEffect(() => {
     if (!effectiveReqId) {
       setError('Missing request id. Please run verification again.');
@@ -56,20 +58,17 @@ function ResultPage() {
             const data = await res.json();
             setResult(data);
             setError(null);
-
-            // normalize media URLs from result payload
             applyAssetUrls({
               id_image_url: data?.id_image_url,
               cropped_face_url: data?.cropped_face_url,
               video_url: data?.video_url,
             });
-            return; // stop polling
+            return;
           }
           setError(null);
         } catch (_) {
           setError(null);
         }
-
         tries += 1;
         if (tries % 10 === 0) setLoadingMsg('Still verifying… almost there');
         await new Promise((r) => setTimeout(r, 2000));
@@ -81,29 +80,19 @@ function ResultPage() {
     };
 
     poll();
-    return () => {
-      stopPollingRef.current = true;
-    };
+    return () => { stopPollingRef.current = true; };
   }, [effectiveReqId]);
 
-  // If manual review and asset URLs are missing, fetch the review bundle
   useEffect(() => {
     const needsManual =
       result?.status?.includes('Manual Review') || result?.status?.startsWith('🟡');
-
     const missingAssets = needsManual && (!idImgSrc || !videoSrc);
-
     if (needsManual && missingAssets && effectiveReqId) {
       (async () => {
         try {
           const res = await fetch(`${API_BASE}/review/${effectiveReqId}`, { cache: 'no-store' });
-          if (res.ok) {
-            const bundle = await res.json();
-            applyAssetUrls(bundle);
-          }
-        } catch (_) {
-          /* ignore; UI has fallbacks */
-        }
+          if (res.ok) applyAssetUrls(await res.json());
+        } catch (_) {}
       })();
     }
   }, [result, idImgSrc, videoSrc, effectiveReqId]);
@@ -124,16 +113,15 @@ function ResultPage() {
     }
   };
 
-  // Fresh run: clear the current req_id and go home; Home will mint a new one
   const resetAndGoHome = async () => {
-    try { localStorage.removeItem('req_id'); } catch (_) {}
+    try { sessionStorage.removeItem('req_id'); } catch {}
+    try { localStorage.removeItem('req_id'); } catch {}
     navigate('/');
   };
 
   const needsManual =
     result?.status?.includes('Manual Review') || result?.status?.startsWith('🟡');
 
-  // Normalize scores list
   const normalizedScores = (() => {
     if (Array.isArray(result?.all_scores)) return result.all_scores;
     if (Array.isArray(result?.all_scores_percent)) {
@@ -142,7 +130,6 @@ function ResultPage() {
     return [];
   })();
 
-  // Loading UI (polling)
   if (!result && !error) {
     return (
       <div className="container-fluid bg-light min-vh-100 d-flex align-items-center justify-content-center">
@@ -169,7 +156,6 @@ function ResultPage() {
     );
   }
 
-  // Fallbacks for media errors
   const onIdImgError = () => {
     const fallback = `${API_BASE}/temp/${effectiveReqId}/id/cropped_id_face.jpg`;
     if (idImgSrc !== fallback) setIdImgSrc(fallback);
@@ -189,36 +175,21 @@ function ResultPage() {
           {needsManual ? (
             <>
               <h4 className="mb-3">Manual Review Required</h4>
-
               {result?.error && <div className="alert alert-warning">{result.error}</div>}
 
               <div className="row mt-3">
                 <div className="col-md-6 mb-3">
                   <h6>ID Image</h6>
                   {idImgSrc ? (
-                    <img
-                      src={idImgSrc}
-                      alt="ID / Cropped Face"
-                      className="img-fluid border"
-                      onError={onIdImgError}
-                    />
-                  ) : (
-                    <div className="text-muted small">(ID image unavailable)</div>
-                  )}
+                    <img src={idImgSrc} alt="ID / Cropped Face" className="img-fluid border" onError={onIdImgError}/>
+                  ) : (<div className="text-muted small">(ID image unavailable)</div>)}
                 </div>
 
                 <div className="col-md-6 mb-3">
                   <h6>Uploaded Video</h6>
                   {showVideo && videoSrc ? (
-                    <video
-                      controls
-                      className="img-fluid border"
-                      src={videoSrc}
-                      onError={onVideoError}
-                    />
-                  ) : (
-                    <div className="text-muted small mt-2">(Video preview unavailable)</div>
-                  )}
+                    <video controls className="img-fluid border" src={videoSrc} onError={onVideoError}/>
+                  ) : (<div className="text-muted small mt-2">(Video preview unavailable)</div>)}
                 </div>
               </div>
 
@@ -245,17 +216,11 @@ function ResultPage() {
               {normalizedScores.length > 0 && (
                 <table className="table table-bordered table-sm mt-2">
                   <thead>
-                    <tr>
-                      <th>Frame</th>
-                      <th>Similarity</th>
-                    </tr>
+                    <tr><th>Frame</th><th>Similarity</th></tr>
                   </thead>
                   <tbody>
                     {normalizedScores.map(([f, s], i) => (
-                      <tr key={i}>
-                        <td>{f}</td>
-                        <td>{pct(s)}%</td>
-                      </tr>
+                      <tr key={i}><td>{f}</td><td>{pct(s)}%</td></tr>
                     ))}
                   </tbody>
                 </table>
@@ -278,12 +243,7 @@ function ResultPage() {
                   <h6 className="mt-4">Selected frames</h6>
                   <div className="d-flex flex-wrap justify-content-center gap-2 mt-2">
                     {result.selected_frames.slice(0, 12).map((u, i) => (
-                      <img
-                        key={i}
-                        src={abs(u)}
-                        alt={`frame-${i}`}
-                        style={{ height: 72, borderRadius: 6 }}
-                      />
+                      <img key={i} src={abs(u)} alt={`frame-${i}`} style={{ height: 72, borderRadius: 6 }} />
                     ))}
                   </div>
                 </>

@@ -1,23 +1,8 @@
 // LiveIDVerification.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-
-const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
-const WS_BASE  = API_BASE.startsWith('https')
-  ? API_BASE.replace('https', 'wss')
-  : API_BASE.replace('http', 'ws');
-
-function getReqId() { return localStorage.getItem('req_id') || null; }
-async function ensureReqId() {
-  let rid = getReqId();
-  if (!rid) {
-    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
-    const data = await res.json();
-    rid = data?.req_id;
-    if (rid) localStorage.setItem('req_id', rid);
-  }
-  return rid;
-}
+import { API_BASE, WS_BASE } from "./api";
+import { ensureReqId, getReqId } from "./storage";
 
 function LiveIDVerification() {
   const navigate = useNavigate();
@@ -31,6 +16,12 @@ function LiveIDVerification() {
   const [result, setResult] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
+
+  // ---------- NEW: Grace period / frames-before-judgment ----------
+  const JUDGE_GRACE_MS = 1200;    // time after WS open before we judge
+  const JUDGE_MIN_FRAMES = 5;     // frames before we judge
+  const cameraStartAtRef = useRef(0);
+  const framesSeenRef = useRef(0);
 
   // ---------- STABILITY / HYSTERESIS ----------
   const BRIGHT_STREAK = 12;
@@ -48,7 +39,6 @@ function LiveIDVerification() {
   const INSIDE_STREAK = 8;
   const GLARE_STREAK  = 10;
 
-  const alpha = 0.25;
   const frameSmoothRef = useRef(null);
   const faceSmoothRef  = useRef(null);
   const lastFrameBrightFailAtRef = useRef(0);
@@ -107,7 +97,7 @@ function LiveIDVerification() {
     setStatus("Requesting camera…");
 
     try {
-      const reqId = await ensureReqId();
+      const reqId = await ensureReqId(API_BASE);
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -126,10 +116,20 @@ function LiveIDVerification() {
       });
 
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
-      ws.onopen = () => setStatus("WS connected, streaming frames…");
+      ws.onopen = () => {
+        setStatus("WS connected, streaming frames…");
+        // reset grace counters
+        cameraStartAtRef.current = Date.now();
+        framesSeenRef.current = 0;
+      };
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
-      ws.onmessage = (evt) => { try { setResult(JSON.parse(evt.data)); } catch {} };
+      ws.onmessage = (evt) => {
+        try {
+          setResult(JSON.parse(evt.data));
+          framesSeenRef.current += 1; // count frames for judgment readiness
+        } catch {}
+      };
       wsRef.current = ws;
       startSendingFrames();
     } catch (err) {
@@ -171,8 +171,11 @@ function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      const MIN_W = 900;
-      if (w < MIN_W) {
+      // Require the ID ROI to fill >=55% of camera width (mobile-friendly)
+      const MIN_RATIO = 0.55;
+      const vw = v.videoWidth || 0;
+      const minW = Math.round(vw * MIN_RATIO);
+      if (w < minW) {
         alert("Please move closer so the ID fills the rectangle.");
         setIsUploading(false);
         return;
@@ -225,6 +228,14 @@ function LiveIDVerification() {
   useEffect(() => {
     if (!result) return;
 
+    // Only judge after grace period and a few frames
+    const readyToJudge =
+      cameraOn &&
+      framesSeenRef.current >= JUDGE_MIN_FRAMES &&
+      Date.now() - cameraStartAtRef.current >= JUDGE_GRACE_MS;
+
+    if (!readyToJudge) return; // skip building streaks during warm-up
+
     const frameMean = typeof result.brightness_mean === "number" ? result.brightness_mean : null;
     let frameOk = false;
     if (frameMean != null) {
@@ -254,7 +265,7 @@ function LiveIDVerification() {
 
     const faceOk   = !!result.face_detected;
     const idOk     = result.id_card_detected === true;
-    const insideOk = result.inside_rect === true;
+    const insideOk = result.inside_rect === true || result.id_inside_rect === true; // tolerate either key
     const glareClr = !result.glare_detected;
 
     streaksRef.current.fr_b   = frameOk      ? streaksRef.current.fr_b + 1   : 0;
@@ -263,11 +274,17 @@ function LiveIDVerification() {
     streaksRef.current.i      = insideOk     ? streaksRef.current.i    + 1   : 0;
     streaksRef.current.face_b = faceBrightOk ? streaksRef.current.face_b + 1 : 0;
     streaksRef.current.g      = glareClr     ? streaksRef.current.g    + 1   : 0;
-  }, [result]);
+  }, [result, cameraOn]);
 
   const now = Date.now();
   const frameCooldownActive = now - lastFrameBrightFailAtRef.current < FRAME_COOLDOWN_MS;
   const faceCooldownActive  = now - lastFaceBrightFailAtRef.current  < FACE_COOLDOWN_MS;
+
+  // Ready check for messaging
+  const readyToJudge =
+    cameraOn &&
+    framesSeenRef.current >= JUDGE_MIN_FRAMES &&
+    now - cameraStartAtRef.current >= JUDGE_GRACE_MS;
 
   const frameBrightStable = streaksRef.current.fr_b   >= BRIGHT_STREAK && !frameCooldownActive;
   const facePresentStable = streaksRef.current.fb     >= FACE_STREAK;
@@ -280,6 +297,13 @@ function LiveIDVerification() {
                      insideStable && faceBrightStable && glareStable;
 
   const guidance = (() => {
+    // Pre-camera
+    if (!cameraOn) return "Tap “Start Camera” to begin.";
+    // Warm-up neutral messages
+    if (!result) return "Initializing camera…";
+    if (!readyToJudge) return "Checking lighting…";
+
+    // Normal gated guidance
     if (!frameBrightStable) {
       const lbl = result?.brightness_status;
       if (lbl === "too_dark")   return "💡 Image too dark — adjust lighting.";

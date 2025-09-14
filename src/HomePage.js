@@ -1,24 +1,10 @@
+// src/HomePage.jsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-
-const API_BASE = 'https://zmjdegdfastnee-8888.proxy.runpod.net';
-
-function getReqId() {
-  return localStorage.getItem('req_id') || null;
-}
-async function ensureReqId() {
-  let rid = getReqId();
-  if (!rid) {
-    const res = await fetch(`${API_BASE}/req/new`, { method: 'POST' });
-    const data = await res.json();
-    rid = data?.req_id;
-    if (rid) localStorage.setItem('req_id', rid);
-  }
-  return rid;
-}
+import { API_BASE } from './api';
+import { ensureReqId, getReqId } from './storage';
 
 function HomePage() {
-  // UI-only knobs (not sent to backend here)
   const [verifiedBest, setVerifiedBest] = useState(32);
   const [verifiedAvg, setVerifiedAvg] = useState(32);
   const [manualAvgMin, setManualAvgMin] = useState(24);
@@ -31,7 +17,7 @@ function HomePage() {
 
   async function bootstrap() {
     try {
-      const rid = await ensureReqId();
+      const rid = await ensureReqId(API_BASE);
       if (!rid) return;
       await refreshState();
     } catch (e) {
