@@ -19,7 +19,7 @@ function LiveVerification() {
   const recordingStartRef = useRef(null);
   const abortingRef = useRef(false);
 
-  // NEW: prevent double uploads / races
+  // Double-upload guards
   const hasUploadedRef = useRef(false);
   const uploadingRef = useRef(false);
 
@@ -41,21 +41,60 @@ function LiveVerification() {
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
 
-  // Viewport & ellipse
+  // Viewport (use visualViewport height for mobile)
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
-    h: typeof window !== "undefined" ? window.innerHeight : 0,
+    h: typeof window !== "undefined"
+      ? (window.visualViewport?.height ?? window.innerHeight)
+      : 0,
   });
   useEffect(() => {
-    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => setVp({
+      w: window.innerWidth,
+      h: window.visualViewport?.height ?? window.innerHeight,
+    });
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
+    };
   }, []);
-  const ellipseCx = vp.w / 2;
-  const ellipseCy = vp.h / 2;
-  const ellipseRx = (vp.w * 0.9) / 2;
-  const ellipseRy = (vp.h * 0.7) / 2;
-  const bannerTop = Math.max(16, ellipseCy - ellipseRy - 60);
+
+  // Contain layout: show full sensor without cropping
+  function containLayout(containerW, containerH, vidW, vidH) {
+    if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
+    const scale = Math.min(containerW / vidW, containerH / vidH);
+    const dispW = vidW * scale;
+    const dispH = vidH * scale;
+    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
+  }
+
+  // Ellipse defined inside the displayed video (like before, but tied to the video box)
+  function currentDisplayEllipse() {
+    const v = videoRef.current; if (!v) return null;
+    const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
+    if (!vw || !vh) return null;
+    const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
+
+    const ellipseRxDisp = (dispW * 0.9) / 2;
+    const ellipseRyDisp = (dispH * 0.7) / 2;
+    const ellipseCxDisp = dx + dispW / 2;
+    const ellipseCyDisp = dy + dispH / 2;
+
+    // Map displayed ellipse → video pixel coords for backend
+    const ellipseRxVid = ellipseRxDisp / scale;
+    const ellipseRyVid = ellipseRyDisp / scale;
+    const ellipseCxVid = (ellipseCxDisp - dx) / scale;
+    const ellipseCyVid = (ellipseCyDisp - dy) / scale;
+
+    return {
+      // for drawing on screen
+      disp: { cx: ellipseCxDisp, cy: ellipseCyDisp, rx: ellipseRxDisp, ry: ellipseRyDisp },
+      // for backend gating (video coords)
+      vid:  { cx: ellipseCxVid, cy: ellipseCyVid, rx: ellipseRxVid, ry: ellipseRyVid },
+    };
+  }
 
   function cleanup() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -115,8 +154,9 @@ function LiveVerification() {
     try {
       await ensureReqId(API_BASE);
 
+      // ⬇️ Minimal constraints — take raw camera stream
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 30 } },
+        video: { facingMode: "user" },  // keep selfie lens; no forced size/fps
         audio: false,
       });
       streamRef.current = stream;
@@ -137,7 +177,12 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
-        safeSend(ws, JSON.stringify({ ellipseCx, ellipseCy, ellipseRx, ellipseRy }));
+        // Send initial ellipse (in video coords)
+        const e = currentDisplayEllipse();
+        if (e) {
+          const { cx, cy, rx, ry } = e.vid;
+          safeSend(ws, JSON.stringify({ ellipseCx: cx, ellipseCy: cy, ellipseRx: rx, ellipseRy: ry }));
+        }
       };
       ws.onerror = () => setStatus((s) => s + " | WS error");
       ws.onclose = () => setStatus((s) => s + " | WS closed");
@@ -209,16 +254,22 @@ function LiveVerification() {
       if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
         requestAnimationFrame(loop); return;
       }
-      const cw = vp.w || window.innerWidth, ch = vp.h || window.innerHeight;
-      const canvas = document.createElement("canvas"); canvas.width = cw; canvas.height = ch;
-      const ctx = canvas.getContext("2d");
-      const vidW = v.videoWidth, vidH = v.videoHeight;
-      const scale = Math.max(cw / vidW, ch / vidH);
-      const drawW = vidW * scale, drawH = vidH * scale;
-      const dx = (cw - drawW) / 2, dy = (ch - drawH) / 2;
-      ctx.save(); ctx.translate(cw, 0); ctx.scale(-1, 1); ctx.drawImage(v, dx, dy, drawW, drawH); ctx.restore();
 
-      if (Math.random() < 0.02) safeSend(ws, JSON.stringify({ ellipseCx, ellipseCy, ellipseRx, ellipseRy }));
+      // ⬇️ Send RAW sensor frame (no viewport scaling)
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+      const ctx = canvas.getContext("2d");
+      // No mirror here; keep backend & overlay math simple/consistent
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+
+      // Occasionally refresh ellipse in VIDEO coordinates (in case orientation/viewport changes)
+      if (Math.random() < 0.02) {
+        const e = currentDisplayEllipse();
+        if (e) {
+          const { cx, cy, rx, ry } = e.vid;
+          safeSend(ws, JSON.stringify({ ellipseCx: cx, ellipseCy: cy, ellipseRx: rx, ellipseRy: ry }));
+        }
+      }
 
       sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
       if (sendTickRef.current === 0) {
@@ -329,20 +380,50 @@ function LiveVerification() {
 
   const remainingSec = remainingMs != null ? Math.ceil(remainingMs / 1000) : null;
 
+  const dispEllipse = currentDisplayEllipse(); // for drawing only
+  const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
+
   return (
-    <div className="position-relative" style={{ width:"100vw", height:"100vh", overflow:"hidden", background:"#000" }}>
-      <video ref={videoRef} autoPlay muted playsInline
-        style={{ position:"absolute", inset:0, width:"100vw", height:"100vh", objectFit:"cover", transform:"scaleX(-1)" }}/>
-      <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-        <defs>
-          <mask id="cutout-mask">
-            <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
-            <ellipse cx={ellipseCx} cy={ellipseCy} rx={ellipseRx} ry={ellipseRy} fill="black"/>
-          </mask>
-        </defs>
-        <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask)"/>
-        <ellipse cx={ellipseCx} cy={ellipseCy} rx={ellipseRx} ry={ellipseRy} fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6"/>
-      </svg>
+    <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{
+          position:"absolute", inset:0, width:"100%", height:"100%",
+          objectFit:"contain" // show full camera feed; no cropping
+          // NOTE: we intentionally do NOT mirror here to keep math aligned with frames sent to backend
+        }}
+      />
+
+      {dispEllipse && (
+        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+          <defs>
+            <mask id="cutout-mask-live">
+              <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
+              <ellipse
+                cx={dispEllipse.disp.cx}
+                cy={dispEllipse.disp.cy}
+                rx={dispEllipse.disp.rx}
+                ry={dispEllipse.disp.ry}
+                fill="black"
+              />
+            </mask>
+          </defs>
+          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
+          <ellipse
+            cx={dispEllipse.disp.cx}
+            cy={dispEllipse.disp.cy}
+            rx={dispEllipse.disp.rx}
+            ry={dispEllipse.disp.ry}
+            fill="none"
+            stroke="white"
+            strokeWidth="3"
+            strokeDasharray="6 6"
+          />
+        </svg>
+      )}
 
       <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
         <div style={{ maxWidth: 680, width: "100%", textAlign: "center", background: "rgba(0,0,0,0.6)", color: "#fff",
