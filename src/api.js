@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'http://localhost:8888';
+const RUNPOD_DEFAULT = 'https://087da1b465c9.ngrok-free.app';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
