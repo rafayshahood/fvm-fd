@@ -11,4 +11,5 @@ const fromCRA    = typeof process !== 'undefined' && process.env?.REACT_APP_API_
 const isLocal    = typeof window !== 'undefined' && /^localhost$/i.test(window.location.hostname);
 
 export const API_BASE = (fromVite || fromCRA || (isLocal ? LOCAL_DEFAULT : RUNPOD_DEFAULT)).replace(/\/+$/,'');
-export const WS_BASE  = API_BASE.replace(/^http/i, 'ws');
+// export const WS_BASE  = API_BASE.replace(/^http/i, 'ws');
+const WS_BASE = API_BASE.replace("https", "wss");
