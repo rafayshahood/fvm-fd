@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://ashley-premium-granted-cookbook.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://limits-classic-julia-disclaimer.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
