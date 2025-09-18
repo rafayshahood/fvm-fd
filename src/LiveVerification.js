@@ -19,6 +19,11 @@ function LiveVerification() {
   const recordingStartRef = useRef(null);
   const abortingRef = useRef(false);
 
+  // NEW: offscreen canvas for upright recording
+  const recCanvasRef = useRef(null);
+  const recCtxRef = useRef(null);
+  const recRAFRef = useRef(null);
+
   // Double-upload guards
   const hasUploadedRef = useRef(false);
   const uploadingRef = useRef(false);
@@ -96,6 +101,37 @@ function LiveVerification() {
     };
   }
 
+  // Offscreen canvas drawing for recording upright pixels
+  function startRecCanvasDraw() {
+    const v = videoRef.current;
+    if (!v) return;
+    const cw = v.videoWidth, ch = v.videoHeight;
+    if (!cw || !ch) return;
+
+    let c = recCanvasRef.current;
+    if (!c) {
+      c = document.createElement("canvas");
+      recCanvasRef.current = c;
+    }
+    c.width = cw; c.height = ch;
+    recCtxRef.current = c.getContext("2d");
+
+    const draw = () => {
+      const ctx = recCtxRef.current;
+      if (!ctx) return;
+      // Draw raw camera pixels (no CSS transforms, no mirroring)
+      ctx.drawImage(v, 0, 0, cw, ch);
+      recRAFRef.current = requestAnimationFrame(draw);
+    };
+    draw();
+  }
+
+  function stopRecCanvasDraw() {
+    if (recRAFRef.current) cancelAnimationFrame(recRAFRef.current);
+    recRAFRef.current = null;
+    recCtxRef.current = null;
+  }
+
   function cleanup() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       try { wsRef.current.close(); } catch {}
@@ -106,6 +142,8 @@ function LiveVerification() {
       try { recRef.current.stop(); } catch {}
       recRef.current = null;
     }
+    stopRecCanvasDraw(); // ensure canvas loop is stopped
+
     chunksRef.current = [];
     recordingStartRef.current = null;
     abortingRef.current = false;
@@ -283,15 +321,27 @@ function LiveVerification() {
     return () => { stop = true; };
   }
 
+  // UPDATED: record from the offscreen canvas (upright pixels)
   function startRecording() {
     if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current) return;
+
+    // 1) start drawing onto offscreen canvas
+    startRecCanvasDraw();
+
+    // 2) record the canvas stream, not raw camera stream
+    const canvas = recCanvasRef.current;
+    const recStream = canvas.captureStream(30);
+
     chunksRef.current = [];
     let mr;
-    try { mr = new MediaRecorder(streamRef.current, { mimeType: "video/webm;codecs=vp9" }); }
-    catch { try { mr = new MediaRecorder(streamRef.current, { mimeType: "video/webm" }); } catch { mr = new MediaRecorder(streamRef.current); } }
+    try { mr = new MediaRecorder(recStream, { mimeType: "video/webm;codecs=vp9" }); }
+    catch { try { mr = new MediaRecorder(recStream, { mimeType: "video/webm" }); } catch { mr = new MediaRecorder(recStream); } }
 
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
     mr.onstop = async () => {
+      // stop canvas loop
+      stopRecCanvasDraw();
+
       if (abortingRef.current) {
         chunksRef.current = [];
         abortingRef.current = false;
@@ -330,6 +380,7 @@ function LiveVerification() {
     abortingRef.current = true;
     try { recRef.current.stop(); } catch {}
     recRef.current = null;
+    stopRecCanvasDraw(); // ensure loop stops on abort
     stableStartRef.current = null;
   }
 
