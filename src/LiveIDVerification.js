@@ -81,7 +81,7 @@ function LiveIDVerification() {
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
-    const rectW = dispW, rectH = dispH * 0.55;
+    const rectW = dispW * 0.95, rectH = dispH * 0.6;
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
     return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
