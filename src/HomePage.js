@@ -1,5 +1,5 @@
 // src/HomePage.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { API_BASE } from './api';
 import { ensureReqId, getReqId } from './storage';
@@ -12,17 +12,19 @@ function HomePage() {
   const [idVerified, setIdVerified] = useState(false);
   const [videoVerified, setVideoVerified] = useState(false);
 
-  // NEW: deepfake state preview (optional UI hint)
-  const [deepfakeState, setDeepfakeState] = useState(null);
-
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
+
+  // internal polling control
+  const pollTimerRef = useRef(null);
+  const pollEndAtRef = useRef(0);
 
   async function bootstrap() {
     try {
       const rid = await ensureReqId(API_BASE);
       if (!rid) return;
       await refreshState();
+      maybeStartShortPolling();
     } catch (e) {
       console.error('bootstrap failed', e);
     }
@@ -37,23 +39,70 @@ function HomePage() {
       const st = data?.state || {};
       setIdVerified(!!st.id_verified);
       setVideoVerified(!!st.video_verified);
-      // NEW: keep whatever backend shares about deepfake progress/result
-      setDeepfakeState(st.deepfake ?? null);
     } catch (e) {
       console.error('state refresh failed', e);
     }
   }
 
-  useEffect(() => { bootstrap(); }, []);
+  // Short polling window to catch the moment video.mp4 lands on the backend
+  function maybeStartShortPolling() {
+    // if already verified or a poll is running, do nothing
+    if (videoVerified || pollTimerRef.current) return;
+
+    // poll for up to 30s from now
+    pollEndAtRef.current = Date.now() + 30_000;
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        await refreshState();
+      } finally {
+        // stop when verified or when time window expires
+        if (videoVerified || Date.now() > pollEndAtRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      }
+    }, 2000);
+  }
+
   useEffect(() => {
-    const onFocus = () => refreshState();
+    bootstrap();
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When user navigates back (SPA), pageshow/focus/visibilitychange can help us refresh
+  useEffect(() => {
+    const onFocus = () => { refreshState(); maybeStartShortPolling(); };
+    const onShow = () => { refreshState(); maybeStartShortPolling(); };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshState();
+        maybeStartShortPolling();
+      }
+    };
     window.addEventListener('focus', onFocus);
-    window.addEventListener('pageshow', onFocus);
+    window.addEventListener('pageshow', onShow);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('focus', onFocus);
-      window.removeEventListener('pageshow', onFocus);
+      window.removeEventListener('pageshow', onShow);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // If videoVerified flips to true while polling, stop the timer immediately
+  useEffect(() => {
+    if (videoVerified && pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, [videoVerified]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -84,37 +133,6 @@ function HomePage() {
   };
 
   const cardDisabled = submitting;
-
-  // Small helper to render a badge for deepfake state on the home card
-  const DeepfakeBadge = () => {
-    if (!deepfakeState) return null;
-    if (deepfakeState.error) {
-      return (
-        <span className="badge bg-warning text-dark px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
-          <span>⚠️</span><span>Deepfake check error</span>
-        </span>
-      );
-    }
-    if (deepfakeState.completed === true) {
-      const detected = deepfakeState.is_deepfake === true || deepfakeState.detected === true || deepfakeState.is_real === false;
-      return detected ? (
-        <span className="badge bg-danger px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
-          <span>✖</span><span>Deepfake detected</span>
-        </span>
-      ) : (
-        <span className="badge bg-success px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
-          <span>✔</span><span>Deepfake not detected</span>
-        </span>
-      );
-    }
-    // running or unknown
-    return (
-      <span className="badge bg-secondary px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
-        <span className="spinner-border spinner-border-sm" aria-hidden="true" />
-        <span>Deepfake check running…</span>
-      </span>
-    );
-  };
 
   return (
     <div className="container-fluid bg-light min-vh-100">
@@ -159,8 +177,6 @@ function HomePage() {
                       <span>✔</span><span>Video Verified</span>
                     </span>
                   )}
-                  {/* NEW: small status chip for deepfake */}
-                  <DeepfakeBadge />
                 </div>
               </div>
 
