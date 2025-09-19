@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://prizes-mailing-dressing-hide.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://3we1w1swtu4j72-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
