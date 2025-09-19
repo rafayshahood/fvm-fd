@@ -31,8 +31,8 @@ function LiveIDVerification() {
 
   const FACE_BRIGHT_STREAK = 12;
   const FACE_COOLDOWN_MS = 1500;
-  const FACE_OK_MIN = 75,  FACE_OK_MAX = 180;
-  const FACE_FAIL_MIN = 65, FACE_FAIL_MAX = 190;
+  const FACE_OK_MIN = 75,  FACE_OK_MAX = 230;
+  const FACE_FAIL_MIN = 65, FACE_FAIL_MAX = 240;
 
   const FACE_STREAK   = 4;
   const IDCARD_STREAK = 6;
