@@ -18,8 +18,8 @@ function LiveIDVerification() {
   const [cameraOn, setCameraOn] = useState(false);
 
   // ---------- NEW: Grace period / frames-before-judgment ----------
-  const JUDGE_GRACE_MS = 1200;    // time after WS open before we judge
-  const JUDGE_MIN_FRAMES = 5;     // frames before we judge
+  const JUDGE_GRACE_MS = 1200;
+  const JUDGE_MIN_FRAMES = 5;
   const cameraStartAtRef = useRef(0);
   const framesSeenRef = useRef(0);
 
@@ -65,7 +65,7 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // Layout helpers — use CONTAIN so nothing is cropped visually
+  // Contain layout (no cropping)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -74,16 +74,25 @@ function LiveIDVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // The ID rectangle is sized/centered within the DISPLAYED video area
+  // --- ID Rect: keep ~1.58:1 card aspect, sized to fit (works across devices) ---
   function currentDisplayRect() {
     const v = videoRef.current;
     if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
-    const rectW = dispW * 0.9, rectH = dispH * 0.3;
+
+    // Card aspect (w:h ≈ 1.58); take up to 90% width but clamp by height
+    const targetAspect = 1.58;
+    let rectW = dispW * 0.90;
+    let rectH = rectW / targetAspect;
+    if (rectH > dispH * 0.62) { // don’t exceed ~62% of visible height
+      rectH = dispH * 0.62;
+      rectW = rectH * targetAspect;
+    }
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
+
     return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
   }
 
@@ -110,6 +119,21 @@ function LiveIDVerification() {
     return { x: Math.round(x1), y: Math.round(y1), w, h };
   }
 
+  async function getBestStream() {
+    // Try a few constraint sets; gracefully degrade for widest device support.
+    const trials = [
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },  audio: false },
+      { video: { facingMode: { ideal: "environment" } }, audio: false },
+    ];
+    let err = null;
+    for (const c of trials) {
+      try { return await navigator.mediaDevices.getUserMedia(c); }
+      catch (e) { err = e; }
+    }
+    throw err || new Error("Camera unavailable");
+  }
+
   async function startCamera() {
     if (startedRef.current) return;
     startedRef.current = true;
@@ -118,15 +142,21 @@ function LiveIDVerification() {
     try {
       const reqId = await ensureReqId(API_BASE);
 
-      // ⬇️ Minimal constraints: take exactly what the browser/hardware gives
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
-        audio: false,
-      });
-
+      const stream = await getBestStream();
       streamRef.current = stream;
       const v = videoRef.current; if (!v) return;
-      v.srcObject = stream; v.muted = true; v.playsInline = true;
+      v.srcObject = stream; v.muted = true; v.setAttribute("playsInline", "true");
+
+      // Try to improve sharpness/exposure on capable devices
+      try {
+        const [track] = stream.getVideoTracks();
+        const caps = track.getCapabilities?.() || {};
+        const cons = {};
+        if (caps.focusMode && caps.focusMode.includes("continuous")) cons.focusMode = "continuous";
+        if (caps.exposureMode && caps.exposureMode.includes("continuous")) cons.exposureMode = "continuous";
+        if (Object.keys(cons).length) await track.applyConstraints({ advanced: [cons] });
+      } catch {}
+
       v.addEventListener("loadedmetadata", function onLoaded() {
         v.removeEventListener("loadedmetadata", onLoaded);
         setStatus(`Video ${v.videoWidth}×${v.videoHeight}`);
@@ -142,10 +172,7 @@ function LiveIDVerification() {
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
       ws.onmessage = (evt) => {
-        try {
-          setResult(JSON.parse(evt.data));
-          framesSeenRef.current += 1;
-        } catch {}
+        try { setResult(JSON.parse(evt.data)); framesSeenRef.current += 1; } catch {}
       };
       wsRef.current = ws;
       startSendingFrames();
@@ -163,12 +190,12 @@ function LiveIDVerification() {
       const v = videoRef.current, ws = wsRef.current;
       if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
       if (v.videoWidth && v.videoHeight) {
-        // Send the RAW sensor frame (no forced resizing)
         const canvas = document.createElement("canvas");
         canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-        const ctx = canvas.getContext("2d");
+        const ctx = canvas.getContext("2d", { alpha: false });
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        const b64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
+        const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
         if (b64) { try { ws.send(b64); } catch {} }
       }
       setTimeout(() => requestAnimationFrame(loop), 100);
@@ -193,24 +220,26 @@ function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // Keep your existing proximity rule (55% of camera width)
+      // Keep proximity rule in video coords
       const MIN_RATIO = 0.55;
       const vw = v.videoWidth || 0;
-      const minW = Math.round(vw * MIN_RATIO);
-      if (w < minW) {
-        alert("Please move closer so the ID fills the rectangle.");
+      if (w < Math.round(vw * MIN_RATIO)) {
+        alert("Move closer so the ID fills the rectangle.");
         setIsUploading(false);
         return;
       }
 
-      // Create full-frame canvas (raw) then crop ROI
+      // Full-frame canvas, then crop the exact ROI (to keep best native resolution)
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
-      full.getContext("2d").drawImage(v, 0, 0, full.width, full.height);
+      const fctx = full.getContext("2d", { alpha: false });
+      fctx.imageSmoothingEnabled = false;
+      fctx.drawImage(v, 0, 0, full.width, full.height);
 
       const crop = document.createElement("canvas");
       crop.width = w; crop.height = h;
-      const cctx = crop.getContext("2d");
+      const cctx = crop.getContext("2d", { alpha: false });
+      cctx.imageSmoothingEnabled = false;
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
       const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
@@ -287,7 +316,7 @@ function LiveIDVerification() {
 
     const faceOk   = !!result.face_detected;
     const idOk     = result.id_card_detected === true;
-    const insideOk = result.inside_rect === true || result.id_inside_rect === true;
+    const insideOk = result.id_inside_rect === true;
     const glareClr = !result.glare_detected;
 
     streaksRef.current.fr_b   = frameOk      ? streaksRef.current.fr_b + 1   : 0;
@@ -331,7 +360,7 @@ function LiveIDVerification() {
     }
     if (!facePresentStable) return "❌ No face detected on ID.";
     if (!idCardStable)      return "📇 Place the ID card in view.";
-    if (!insideStable)      return "📐 Align the ID face fully inside the rectangle.";
+    if (!insideStable)      return "📐 Align the ID fully inside the rectangle.";
     if (!faceBrightStable) {
       const fl = result?.face_brightness_status;
       if (fl === "too_dark")   return "💡 Face too dark — add light.";
@@ -343,11 +372,9 @@ function LiveIDVerification() {
     return "✅ You can capture now.";
   })();
 
-  // Boxes mapped to the displayed video area
   const rawBox     = mapBoxToScreen(result?.largest_bbox);
   const idCardBox  = mapBoxToScreen(result?.id_card_bbox);
 
-  // Display rect (hole) only when video is ready to avoid odd masking
   const disp = currentDisplayRect();
   const showMask = cameraOn && disp;
 
@@ -357,7 +384,7 @@ function LiveIDVerification() {
       <video ref={videoRef} autoPlay muted playsInline
              style={{
                position:"absolute", inset:0, width:"100%", height:"100%",
-               objectFit:"contain"  // show full sensor, no cropping
+               objectFit:"contain"
              }} />
 
       {showMask && (
