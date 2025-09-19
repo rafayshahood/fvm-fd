@@ -4,6 +4,69 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
+// --- NEW: Minimal full-screen blocking overlay (spinner + message)
+function BlockingOverlay({ text = "Processing… Please wait." }) {
+  return (
+    <div
+      role="alert"
+      aria-busy="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        backdropFilter: "blur(2px)",
+        pointerEvents: "all",
+      }}
+    >
+      {/* Inline SVG spinner (no external CSS) */}
+      <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
+        <circle
+          cx="25"
+          cy="25"
+          r="20"
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          opacity="0.25"
+        />
+        <path
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          d="M25 5 a20 20 0 0 1 0 40"
+        >
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 25 25"
+            to="360 25 25"
+            dur="0.9s"
+            repeatCount="indefinite"
+          />
+        </path>
+      </svg>
+      <div
+        style={{
+          marginTop: 14,
+          color: "#fff",
+          fontSize: 16,
+          textAlign: "center",
+          padding: "6px 10px",
+        }}
+      >
+        {text}
+      </div>
+    </div>
+  );
+}
+
 function LiveIDVerification() {
   const navigate = useNavigate();
 
@@ -74,7 +137,7 @@ function LiveIDVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // --- make rect match backend ratios (RECT_W_RATIO=0.95, RECT_H_RATIO=0.60) ---
+  // --- make rect match backend ratios (RECT_W_RATIO=0.95, RECT_H_RATIO=0.45) ---
   function currentDisplayRect() {
     const v = videoRef.current;
     if (!v) return null;
@@ -200,7 +263,8 @@ function LiveIDVerification() {
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
-      setIsUploading(true);
+      setIsUploading(true); // <-- shows blocking overlay
+
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
@@ -246,6 +310,7 @@ function LiveIDVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
+      // Clean up and leave
       if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
@@ -255,7 +320,7 @@ function LiveIDVerification() {
       console.error(e);
       alert(e.message || "Capture failed");
     } finally {
-      setIsUploading(false);
+      setIsUploading(false); // <-- hides overlay
     }
   }
 
@@ -295,7 +360,7 @@ function LiveIDVerification() {
       if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
     }
 
-    // ---- NEW: only judge face brightness AFTER size gates are OK ----
+    // ---- ONLY judge face brightness AFTER size gates are OK ----
     const idFillOk  = result?.id_fill_ok === true;
     const faceSizeOk = result?.face_size_ok === true;
     const haveFaceBrightness = typeof result?.face_brightness_mean === "number";
@@ -311,7 +376,6 @@ function LiveIDVerification() {
                                 : (fm >= FACE_OK_MIN  && fm <= FACE_OK_MAX);
       if (!faceBrightOk) lastFaceBrightFailAtRef.current = Date.now();
     } else {
-      // Don’t penalize brightness streak until size gates are satisfied
       faceBrightOk = false;
     }
 
@@ -344,7 +408,7 @@ function LiveIDVerification() {
   const faceBrightStable  = streaksRef.current.face_b >= FACE_BRIGHT_STREAK && !faceCooldownActive;
   const glareStable       = streaksRef.current.g      >= GLARE_STREAK;
 
-  // ---- NEW: include backend size gates in capture readiness ----
+  // include backend size gates in capture readiness
   const idFillOk   = result?.id_fill_ok === true;
   const faceSizeOk = result?.face_size_ok === true;
 
@@ -368,7 +432,6 @@ function LiveIDVerification() {
     if (!idCardStable)      return "📇 Place the ID card in view.";
     if (!insideStable)      return "📐 Align the ID fully inside the rectangle.";
 
-    // ---- NEW: show true blockers before brightness ----
     if (!idFillOk)   return "↔️ Move closer so the ID fills the rectangle.";
     if (!faceSizeOk) return "🔍 ID face too small — move closer.";
 
@@ -451,6 +514,9 @@ function LiveIDVerification() {
           {status}
         </div>
       </div>
+
+      {/* NEW: Block all interaction while uploading/processing */}
+      {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
     </div>
   );
 }
