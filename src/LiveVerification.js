@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
-// --- NEW: Minimal full-screen blocking overlay (spinner + message)
+// --- Minimal full-screen blocking overlay (spinner + message)
 function BlockingOverlay({ text = "Processing… Please wait." }) {
   return (
     <div
@@ -60,7 +60,7 @@ function LiveVerification() {
   const recordingStartRef = useRef(null);
   const abortingRef = useRef(false);
 
-  // NEW: offscreen canvas for upright recording
+  // Offscreen canvas for upright recording
   const recCanvasRef = useRef(null);
   const recCtxRef = useRef(null);
   const recRAFRef = useRef(null);
@@ -87,7 +87,7 @@ function LiveVerification() {
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
 
-  // NEW: show blocking overlay during upload/processing
+  // Show blocking overlay during upload/processing
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Viewport (use visualViewport height for mobile)
@@ -272,13 +272,14 @@ function LiveVerification() {
           const enabled = data?.checks || {
             face: true, ellipse: true, brightness: true, frontal: true, spoof: true, glasses: true,
           };
-            
+
           const passIfEnabled = (flag, condition) => (flag ? !!condition : true);
+
           const allGood =
             passIfEnabled(enabled.face,       data?.face_detected === true) &&
             passIfEnabled(enabled.ellipse,    data?.inside_ellipse === true) &&
-            passIfEnabled(enabled.frontal,    data?.front_facing === true) &&
             passIfEnabled(enabled.brightness, data?.brightness_status === "ok") &&
+            passIfEnabled(enabled.frontal,    data?.front_facing === true) &&
             passIfEnabled(enabled.glasses,    data?.glasses_detected !== true) &&
             passIfEnabled(enabled.spoof,      data?.spoof_is_real !== false);
 
@@ -340,6 +341,7 @@ function LiveVerification() {
       const ctx = canvas.getContext("2d");
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
+      // Occasionally refresh ellipse in VIDEO coordinates
       if (Math.random() < 0.02) {
         const e = currentDisplayEllipse();
         if (e) {
@@ -394,10 +396,9 @@ function LiveVerification() {
       uploadingRef.current = true;
       hasUploadedRef.current = true;
 
-      // --- NEW: show blocking overlay while uploading
       setIsProcessing(true);
       await uploadSingle(blob);
-      // NOTE: overlay is intentionally not turned off here because we navigate away on success.
+      // overlay remains until navigation
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -441,7 +442,6 @@ function LiveVerification() {
       await res.json();
 
       cleanup();
-      // Keep overlay visible until we leave the page
       navigate("/", { replace: true });
       setTimeout(() => {
         if (window.location.pathname !== "/") window.location.assign("/");
@@ -449,8 +449,7 @@ function LiveVerification() {
     } catch (e) {
       console.error("Upload error:", e);
       setStatus("Upload error");
-      setIsProcessing(false); // hide overlay on error so user can retry
-      // allow another attempt
+      setIsProcessing(false); // allow retry
       hasUploadedRef.current = false;
       uploadingRef.current = false;
     }
@@ -464,14 +463,13 @@ function LiveVerification() {
       face: true, ellipse: true, brightness: true, frontal: true, spoof: true, glasses: true,
     };
 
-
     if (enabled.brightness && result.brightness_status === "too_dark")   return "💡 Lighting too low — move to a brighter place.";
     if (enabled.brightness && result.brightness_status === "too_bright") return "☀️ Lighting too strong — reduce direct light.";
     if (enabled.face && !result.face_detected)                           return "❌ No face detected.";
-    if (enabled.face && result.num_faces > 1)  
-    if (enabled.frontal && result.front_facing === false)                           return "👥 Multiple faces detected — only you should be in the frame.";
-    if (enabled.glasses && result.glasses_detected === true)             return "🕶️ Please remove glasses.";
+    if (enabled.face && result.num_faces > 1)                            return "👥 Multiple faces detected — only you should be in the frame.";
     if (enabled.ellipse && !result.inside_ellipse)                       return "🎯 Please bring your face fully inside the oval.";
+    if (enabled.frontal && result.front_facing === false)                return `🧭 ${result.front_guidance || "Please face the camera straight-on."}`;
+    if (enabled.glasses && result.glasses_detected === true)             return "🕶️ Please remove glasses.";
     if (enabled.spoof && result.spoof_is_real === false)                 return "🔒 Possible spoof detected — show your live face clearly.";
     return recRef.current ? "🎬 Recording… hold steady." : "✅ Perfect — hold steady.";
   })();
@@ -548,7 +546,7 @@ function LiveVerification() {
         </div>
       </div>
 
-      {/* NEW: Block all interaction while uploading/processing */}
+      {/* Block all interaction while uploading/processing */}
       {isProcessing && <BlockingOverlay text="Uploading your selfie video… Please wait." />}
     </div>
   );
