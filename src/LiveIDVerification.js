@@ -83,7 +83,7 @@ function LiveIDVerification() {
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
 
     const rectW = dispW * 0.95; // must match id.py RECT_W_RATIO
-    const rectH = dispH * 0.60; // must match id.py RECT_H_RATIO
+    const rectH = dispH * 0.45; // must match id.py RECT_H_RATIO
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
 
