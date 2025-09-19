@@ -22,12 +22,10 @@ function ResultPage() {
   const [decision, setDecision] = useState(null);
   const [backendMessage, setBackendMessage] = useState(null);
 
-  // Media state
   const [idImgSrc, setIdImgSrc] = useState(null);
   const [videoSrc, setVideoSrc] = useState(null);
   const [showVideo, setShowVideo] = useState(true);
 
-  // NEW: deepfake live status (poll if verify-session result didn’t have it yet)
   const [deepfake, setDeepfake] = useState(null);
   const [deepfakePolling, setDeepfakePolling] = useState(false);
 
@@ -42,7 +40,6 @@ function ResultPage() {
     setVideoSrc(vidUrl);
   };
 
-  // Base polling for result.json
   useEffect(() => {
     if (!effectiveReqId) {
       setError('Missing request id. Please run verification again.');
@@ -54,7 +51,7 @@ function ResultPage() {
       const url = `${API_BASE}/temp/${effectiveReqId}/result.json`;
 
       let tries = 0;
-      const maxTries = 90; // ~3 minutes @ 2s
+      const maxTries = 90;
       while (!stopPollingRef.current && tries < maxTries) {
         try {
           const res = await fetch(url, { cache: 'no-store' });
@@ -67,7 +64,6 @@ function ResultPage() {
               cropped_face_url: data?.cropped_face_url,
               video_url: data?.video_url,
             });
-            // capture any deepfake fields included in the result
             const df = {
               status: data?.deepfake_status,
               detected: data?.deepfake_detected,
@@ -96,12 +92,15 @@ function ResultPage() {
     return () => { stopPollingRef.current = true; };
   }, [effectiveReqId]);
 
-  // If deepfake wasn’t completed when result.json arrived, poll deepfake.json
   useEffect(() => {
     if (!effectiveReqId) return;
 
     const alreadyHaveFinal =
-      deepfake && (typeof deepfake.detected === 'boolean' || deepfake?.status === 'done');
+      deepfake && (
+        deepfake.completed === true ||
+        typeof deepfake.is_deepfake === 'boolean' ||
+        typeof deepfake.is_real === 'boolean'
+      );
 
     const shouldStart =
       result && !alreadyHaveFinal &&
@@ -115,23 +114,28 @@ function ResultPage() {
     (async () => {
       const url = `${API_BASE}/temp/${effectiveReqId}/deepfake.json`;
       let tries = 0;
-      const maxTries = 120; // up to ~4 minutes @ 2s
+      const maxTries = 120;
 
       while (!cancelled && tries < maxTries) {
+        const ac = new AbortController();
         try {
-          const res = await fetch(url, { cache: 'no-store' });
+          const res = await fetch(url, { cache: 'no-store', signal: ac.signal });
           if (res.ok) {
             const data = await res.json();
             setDeepfake(data);
-
-            // stop when completed or when we have a boolean verdict
-            if (data?.completed === true || typeof data?.is_deepfake === 'boolean' || typeof data?.is_real === 'boolean') {
-              break;
+            if (
+              data?.completed === true ||
+              typeof data?.is_deepfake === 'boolean' ||
+              typeof data?.is_real === 'boolean'
+            ) {
+              setDeepfakePolling(false);
+              return;
             }
           }
         } catch (_) {}
         tries += 1;
         await new Promise((r) => setTimeout(r, 2000));
+        ac.abort();
       }
       setDeepfakePolling(false);
     })();
@@ -186,55 +190,33 @@ function ResultPage() {
     return [];
   })();
 
-  if (!result && !error) {
-    return (
-      <div className="container-fluid bg-light min-vh-100 d-flex align-items-center justify-content-center">
-        <div className="text-center">
-          <div className="spinner-border mb-3" role="status" aria-hidden="true" />
-          <h4 className="fw-semibold">{loadingMsg}</h4>
-          <p className="text-muted mb-0">This can take a moment.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (error && !result) {
-    return (
-      <div className="container-fluid bg-light min-vh-100 d-flex align-items-center justify-content-center">
-        <div className="text-center">
-          <h4 className="text-danger mb-3">Error</h4>
-          <p className="mb-4">{error}</p>
-          <button className="btn btn-secondary" onClick={resetAndGoHome}>
-            Run Another Verification
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   const onIdImgError = () => {
     const fallback = `${API_BASE}/temp/${effectiveReqId}/id/cropped_id_face.jpg`;
     if (idImgSrc !== fallback) setIdImgSrc(fallback);
   };
   const onVideoError = () => setShowVideo(false);
 
-  // ----- Deepfake verdict UI helpers -----
   const renderDeepfakeBlock = () => {
-    // Prefer explicit fields in result; else fall back to deepfake.json state
-    const detected =
-      (typeof result?.deepfake_detected === 'boolean' ? result.deepfake_detected : undefined);
-    const status =
-      result?.deepfake_status ||
-      deepfake?.status ||
-      (deepfake?.completed ? 'done' : (deepfake ? 'running' : undefined));
+    const dfCompleted = deepfake?.completed === true;
+    const dfIsDeepfake =
+      typeof deepfake?.is_deepfake === 'boolean'
+        ? deepfake.is_deepfake
+        : (typeof deepfake?.is_real === 'boolean' ? !deepfake.is_real : undefined);
+
+    const resultDetected =
+      (typeof result?.deepfake_detected === 'boolean') ? result.deepfake_detected : undefined;
 
     const finalDetected =
-      (typeof detected === 'boolean') ? detected
-        : (typeof deepfake?.is_deepfake === 'boolean' ? deepfake.is_deepfake
-          : (typeof deepfake?.is_real === 'boolean' ? !deepfake.is_real : undefined));
+      (typeof dfIsDeepfake === 'boolean') ? dfIsDeepfake
+        : (typeof resultDetected === 'boolean' ? resultDetected : undefined);
 
-    const isRunning =
-      (status === 'running' || (finalDetected === undefined && !deepfake?.completed));
+    const status = dfCompleted
+      ? 'done'
+      : (deepfake?.status ?? result?.deepfake_status);
+
+    const isRunning = !dfCompleted
+      && (typeof finalDetected !== 'boolean')
+      && (status === 'running' || status === undefined);
 
     if (isRunning) {
       return (
@@ -261,7 +243,7 @@ function ResultPage() {
       );
     }
 
-    if (finalDetected === false) {
+    if (finalDetected === false || dfCompleted) {
       return (
         <div className="alert alert-success">
           <strong>Deepfake not detected.</strong>
@@ -269,9 +251,34 @@ function ResultPage() {
       );
     }
 
-    // Unknown state – don’t render anything noisy
     return null;
   };
+
+  if (!result && !error) {
+    return (
+      <div className="container-fluid bg-light min-vh-100 d-flex align-items-center justify-content-center">
+        <div className="text-center">
+          <div className="spinner-border mb-3" role="status" aria-hidden="true" />
+          <h4 className="fw-semibold">{loadingMsg}</h4>
+          <p className="text-muted mb-0">This can take a moment.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !result) {
+    return (
+      <div className="container-fluid bg-light min-vh-100 d-flex align-items-center justify-content-center">
+        <div className="text-center">
+          <h4 className="text-danger mb-3">Error</h4>
+          <p className="mb-4">{error}</p>
+          <button className="btn btn-secondary" onClick={resetAndGoHome}>
+            Run Another Verification
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container-fluid bg-light min-vh-100">
@@ -287,10 +294,7 @@ function ResultPage() {
             <>
               <h4 className="mb-3">Manual Review Required</h4>
               {result?.error && <div className="alert alert-warning">{result.error}</div>}
-
-              {/* Deepfake status for manual review too */}
               {renderDeepfakeBlock()}
-
               <div className="row mt-3">
                 <div className="col-md-6 mb-3">
                   <h6>ID Image</h6>
@@ -298,7 +302,6 @@ function ResultPage() {
                     <img src={idImgSrc} alt="ID / Cropped Face" className="img-fluid border" onError={onIdImgError}/>
                   ) : (<div className="text-muted small">(ID image unavailable)</div>)}
                 </div>
-
                 <div className="col-md-6 mb-3">
                   <h6>Uploaded Video</h6>
                   {showVideo && videoSrc ? (
@@ -306,7 +309,6 @@ function ResultPage() {
                   ) : (<div className="text-muted small mt-2">(Video preview unavailable)</div>)}
                 </div>
               </div>
-
               <div className="d-flex justify-content-center gap-3 mt-4">
                 <button className="btn btn-success" onClick={() => handleManualDecision('verified')}>
                   Mark as Verified
@@ -315,7 +317,6 @@ function ResultPage() {
                   Mark as Unverified
                 </button>
               </div>
-
               {decision && <div className="alert alert-success mt-3">✅ {backendMessage}</div>}
             </>
           ) : result?.error ? (
@@ -327,10 +328,7 @@ function ResultPage() {
           ) : (
             <>
               <h4 className="mb-3">Best Match</h4>
-
-              {/* Deepfake status on success path */}
               {renderDeepfakeBlock()}
-
               {normalizedScores.length > 0 && (
                 <table className="table table-bordered table-sm mt-2">
                   <thead>
@@ -343,19 +341,16 @@ function ResultPage() {
                   </tbody>
                 </table>
               )}
-
               <p><strong>File:</strong> {result.best_match}</p>
               <p><strong>Score:</strong> {pct(result.score)}%</p>
               <p><strong>Average Score:</strong> {pct(result.average_score)}%</p>
               <p><strong>Status:</strong> {result.status}</p>
-
               <img
                 src={abs(result?.best_match_url) || `${API_BASE}/temp/${effectiveReqId}/best_match.png`}
                 alt="Side by side match"
                 className="img-fluid mt-3"
                 onError={(e) => { e.currentTarget.src = `${API_BASE}/temp/${effectiveReqId}/best_match.png`; }}
               />
-
               {Array.isArray(result?.selected_frames) && result.selected_frames.length > 0 && (
                 <>
                   <h6 className="mt-4">Selected frames</h6>
