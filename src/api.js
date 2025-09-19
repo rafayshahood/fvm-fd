@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://resulting-alive-intake-knowledge.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://appearing-breathing-promotions-engagement.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
