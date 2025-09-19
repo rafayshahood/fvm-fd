@@ -9,7 +9,6 @@ function ResultPage() {
   const { reqId: reqIdFromRoute } = useParams();
   const navigate = useNavigate();
 
-  // prefer route param, else fall back to sessionStorage (then legacy localStorage)
   const effectiveReqId =
     reqIdFromRoute ||
     (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('req_id')) ||
@@ -28,6 +27,10 @@ function ResultPage() {
   const [videoSrc, setVideoSrc] = useState(null);
   const [showVideo, setShowVideo] = useState(true);
 
+  // NEW: deepfake live status (poll if verify-session result didn’t have it yet)
+  const [deepfake, setDeepfake] = useState(null);
+  const [deepfakePolling, setDeepfakePolling] = useState(false);
+
   const pct = (x) => (typeof x === 'number' ? Math.round(x * 1000) / 10 : x);
   const stopPollingRef = useRef(false);
 
@@ -39,6 +42,7 @@ function ResultPage() {
     setVideoSrc(vidUrl);
   };
 
+  // Base polling for result.json
   useEffect(() => {
     if (!effectiveReqId) {
       setError('Missing request id. Please run verification again.');
@@ -63,6 +67,15 @@ function ResultPage() {
               cropped_face_url: data?.cropped_face_url,
               video_url: data?.video_url,
             });
+            // capture any deepfake fields included in the result
+            const df = {
+              status: data?.deepfake_status,
+              detected: data?.deepfake_detected,
+              is_real: data?.deepfake_is_real,
+            };
+            if (df.status || typeof df.detected === 'boolean' || typeof df.is_real === 'boolean') {
+              setDeepfake(df);
+            }
             return;
           }
           setError(null);
@@ -82,6 +95,49 @@ function ResultPage() {
     poll();
     return () => { stopPollingRef.current = true; };
   }, [effectiveReqId]);
+
+  // If deepfake wasn’t completed when result.json arrived, poll deepfake.json
+  useEffect(() => {
+    if (!effectiveReqId) return;
+
+    const alreadyHaveFinal =
+      deepfake && (typeof deepfake.detected === 'boolean' || deepfake?.status === 'done');
+
+    const shouldStart =
+      result && !alreadyHaveFinal &&
+      (result.deepfake_status === 'running' || result.deepfake_detected == null);
+
+    if (!shouldStart || deepfakePolling) return;
+
+    let cancelled = false;
+    setDeepfakePolling(true);
+
+    (async () => {
+      const url = `${API_BASE}/temp/${effectiveReqId}/deepfake.json`;
+      let tries = 0;
+      const maxTries = 120; // up to ~4 minutes @ 2s
+
+      while (!cancelled && tries < maxTries) {
+        try {
+          const res = await fetch(url, { cache: 'no-store' });
+          if (res.ok) {
+            const data = await res.json();
+            setDeepfake(data);
+
+            // stop when completed or when we have a boolean verdict
+            if (data?.completed === true || typeof data?.is_deepfake === 'boolean' || typeof data?.is_real === 'boolean') {
+              break;
+            }
+          }
+        } catch (_) {}
+        tries += 1;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      setDeepfakePolling(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [effectiveReqId, result, deepfake, deepfakePolling]);
 
   useEffect(() => {
     const needsManual =
@@ -162,6 +218,61 @@ function ResultPage() {
   };
   const onVideoError = () => setShowVideo(false);
 
+  // ----- Deepfake verdict UI helpers -----
+  const renderDeepfakeBlock = () => {
+    // Prefer explicit fields in result; else fall back to deepfake.json state
+    const detected =
+      (typeof result?.deepfake_detected === 'boolean' ? result.deepfake_detected : undefined);
+    const status =
+      result?.deepfake_status ||
+      deepfake?.status ||
+      (deepfake?.completed ? 'done' : (deepfake ? 'running' : undefined));
+
+    const finalDetected =
+      (typeof detected === 'boolean') ? detected
+        : (typeof deepfake?.is_deepfake === 'boolean' ? deepfake.is_deepfake
+          : (typeof deepfake?.is_real === 'boolean' ? !deepfake.is_real : undefined));
+
+    const isRunning =
+      (status === 'running' || (finalDetected === undefined && !deepfake?.completed));
+
+    if (isRunning) {
+      return (
+        <div className="alert alert-info d-flex align-items-center" role="status" style={{ gap: 12 }}>
+          <span className="spinner-border spinner-border-sm" aria-hidden="true" />
+          <span><strong>Deepfake check:</strong> still running…</span>
+        </div>
+      );
+    }
+
+    if (deepfake?.error || status === 'error') {
+      return (
+        <div className="alert alert-warning">
+          <strong>Deepfake check:</strong> an error occurred.
+        </div>
+      );
+    }
+
+    if (finalDetected === true) {
+      return (
+        <div className="alert alert-danger">
+          <strong>Deepfake detected:</strong> The uploaded video appears to be a deepfake.
+        </div>
+      );
+    }
+
+    if (finalDetected === false) {
+      return (
+        <div className="alert alert-success">
+          <strong>Deepfake not detected.</strong>
+        </div>
+      );
+    }
+
+    // Unknown state – don’t render anything noisy
+    return null;
+  };
+
   return (
     <div className="container-fluid bg-light min-vh-100">
       <div className="text-center py-4">
@@ -176,6 +287,9 @@ function ResultPage() {
             <>
               <h4 className="mb-3">Manual Review Required</h4>
               {result?.error && <div className="alert alert-warning">{result.error}</div>}
+
+              {/* Deepfake status for manual review too */}
+              {renderDeepfakeBlock()}
 
               <div className="row mt-3">
                 <div className="col-md-6 mb-3">
@@ -208,10 +322,14 @@ function ResultPage() {
             <>
               <h4 className="text-danger mb-3">Verification Failed</h4>
               <p><strong>Reason:</strong> {result.error}</p>
+              {renderDeepfakeBlock()}
             </>
           ) : (
             <>
               <h4 className="mb-3">Best Match</h4>
+
+              {/* Deepfake status on success path */}
+              {renderDeepfakeBlock()}
 
               {normalizedScores.length > 0 && (
                 <table className="table table-bordered table-sm mt-2">
