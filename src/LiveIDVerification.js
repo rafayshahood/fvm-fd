@@ -4,6 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
+const RECT_W_RATIO = 0.95; // must match backend id.py RECT_W_RATIO
+const RECT_H_RATIO = 0.60; // must match backend id.py RECT_H_RATIO
+
 function LiveIDVerification() {
   const navigate = useNavigate();
 
@@ -11,19 +14,20 @@ function LiveIDVerification() {
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const startedRef = useRef(false);
+  const sendLoopStopRef = useRef(() => {});
+  const facingModeRef = useRef("environment");
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ---------- NEW: Grace period / frames-before-judgment ----------
+  // ---------- Grace & streaks ----------
   const JUDGE_GRACE_MS = 1200;
   const JUDGE_MIN_FRAMES = 5;
   const cameraStartAtRef = useRef(0);
   const framesSeenRef = useRef(0);
 
-  // ---------- STABILITY / HYSTERESIS ----------
   const BRIGHT_STREAK = 12;
   const FRAME_COOLDOWN_MS = 1200;
   const FRAME_OK_MIN = 60,  FRAME_OK_MAX = 190;
@@ -45,7 +49,7 @@ function LiveIDVerification() {
   const lastFaceBrightFailAtRef  = useRef(0);
   const streaksRef = useRef({ fb:0, idc:0, i:0, g:0, fr_b:0, face_b:0 });
 
-  // ---------- VIEWPORT / OVERLAY ----------
+  // ---------- Viewport / overlay ----------
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
     h: typeof window !== "undefined"
@@ -58,14 +62,13 @@ function LiveIDVerification() {
       h: window.visualViewport?.height ?? window.innerHeight,
     });
     window.addEventListener("resize", onResize);
-    window.visualViewport?.addEventListener("resize", onResize);
+    window.visualViewport?.addEventListener?.("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
-      window.visualViewport?.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener?.("resize", onResize);
     };
   }, []);
 
-  // Contain layout (no cropping)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -74,7 +77,7 @@ function LiveIDVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // --- ID Rect: keep ~1.58:1 card aspect, sized to fit (works across devices) ---
+  // ID rectangle sized exactly like backend expects: width/height ratios of the displayed video
   function currentDisplayRect() {
     const v = videoRef.current;
     if (!v) return null;
@@ -82,14 +85,8 @@ function LiveIDVerification() {
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
 
-    // Card aspect (w:h ≈ 1.58); take up to 90% width but clamp by height
-    const targetAspect = 1.58;
-    let rectW = dispW * 0.90;
-    let rectH = rectW / targetAspect;
-    if (rectH > dispH * 0.62) { // don’t exceed ~62% of visible height
-      rectH = dispH * 0.62;
-      rectW = rectH * targetAspect;
-    }
+    const rectW = dispW * RECT_W_RATIO;
+    const rectH = dispH * RECT_H_RATIO;
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
 
@@ -99,8 +96,9 @@ function LiveIDVerification() {
   function mapBoxToScreen(b) {
     const v = videoRef.current;
     if (!v || !b || !Array.isArray(b) || b.length !== 4) return null;
-    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
-    if (!vw || !vh) return null;
+    const geo = currentDisplayRect();
+    if (!geo) return null;
+    const { scale, dx, dy } = geo;
     const [x1, y1, x2, y2] = b.map(Number);
     return { x: dx + x1 * scale, y: dy + y1 * scale, w: (x2 - x1) * scale, h: (y2 - y1) * scale };
   }
@@ -108,8 +106,9 @@ function LiveIDVerification() {
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
     const v = videoRef.current;
     if (!v) return null;
-    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
-    if (!vw || !vh) return null;
+    const geo = currentDisplayRect();
+    if (!geo) return null;
+    const { vw, vh, scale, dx, dy } = geo;
     const x1 = Math.max(0, Math.min(vw, (sx - dx) / scale));
     const y1 = Math.max(0, Math.min(vh, (sy - dy) / scale));
     const x2 = Math.max(0, Math.min(vw, (sx + sw - dx) / scale));
@@ -119,12 +118,13 @@ function LiveIDVerification() {
     return { x: Math.round(x1), y: Math.round(y1), w, h };
   }
 
-  async function getBestStream() {
-    // Try a few constraint sets; gracefully degrade for widest device support.
+  // ---------- Camera handling ----------
+  async function getBestStream(facingMode = "environment") {
     const trials = [
-      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
-      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },  audio: false },
-      { video: { facingMode: { ideal: "environment" } }, audio: false },
+      { video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 16/9 } }, audio: false },
+      { video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720  }, aspectRatio: { ideal: 16/9 } }, audio: false },
+      { video: { facingMode: { ideal: facingMode } }, audio: false },
+      { video: true, audio: false }, // last-ditch
     ];
     let err = null;
     for (const c of trials) {
@@ -132,6 +132,18 @@ function LiveIDVerification() {
       catch (e) { err = e; }
     }
     throw err || new Error("Camera unavailable");
+  }
+
+  async function applyContinuousAEAF(stream) {
+    try {
+      const [track] = stream.getVideoTracks();
+      if (!track) return;
+      const caps = track.getCapabilities?.() || {};
+      const adv = {};
+      if (caps.focusMode && caps.focusMode.includes("continuous")) adv.focusMode = "continuous";
+      if (caps.exposureMode && caps.exposureMode.includes("continuous")) adv.exposureMode = "continuous";
+      if (Object.keys(adv).length) await track.applyConstraints({ advanced: [adv] });
+    } catch {}
   }
 
   async function startCamera() {
@@ -142,20 +154,13 @@ function LiveIDVerification() {
     try {
       const reqId = await ensureReqId(API_BASE);
 
-      const stream = await getBestStream();
+      const stream = await getBestStream(facingModeRef.current);
       streamRef.current = stream;
+
+      await applyContinuousAEAF(stream);
+
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.setAttribute("playsInline", "true");
-
-      // Try to improve sharpness/exposure on capable devices
-      try {
-        const [track] = stream.getVideoTracks();
-        const caps = track.getCapabilities?.() || {};
-        const cons = {};
-        if (caps.focusMode && caps.focusMode.includes("continuous")) cons.focusMode = "continuous";
-        if (caps.exposureMode && caps.exposureMode.includes("continuous")) cons.exposureMode = "continuous";
-        if (Object.keys(cons).length) await track.applyConstraints({ advanced: [cons] });
-      } catch {}
 
       v.addEventListener("loadedmetadata", function onLoaded() {
         v.removeEventListener("loadedmetadata", onLoaded);
@@ -163,6 +168,7 @@ function LiveIDVerification() {
         v.play().catch(() => {}); setCameraOn(true);
       });
 
+      // WebSocket
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => {
         setStatus("WS connected, streaming frames…");
@@ -175,7 +181,8 @@ function LiveIDVerification() {
         try { setResult(JSON.parse(evt.data)); framesSeenRef.current += 1; } catch {}
       };
       wsRef.current = ws;
-      startSendingFrames();
+
+      sendLoopStopRef.current = startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
@@ -183,25 +190,83 @@ function LiveIDVerification() {
     }
   }
 
+  async function switchCamera() {
+    try {
+      // stop old
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+      facingModeRef.current = facingModeRef.current === "environment" ? "user" : "environment";
+      startedRef.current = false;
+      await startCamera();
+    } catch (e) {
+      console.error(e);
+      setStatus("Couldn’t switch camera");
+    }
+  }
+
+  // Prefer rVFC when available; fallback to RAF+timer
   function startSendingFrames() {
-    let stop = false;
-    const loop = () => {
-      if (stop) return;
-      const v = videoRef.current, ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
+    let stopped = false;
+    const v = videoRef.current;
+
+    // Pause when tab is hidden to save CPU/bandwidth
+    const onVis = () => { /* nothing; loop checks document.hidden */ };
+    document.addEventListener("visibilitychange", onVis);
+
+    const sendFrame = () => {
+      if (stopped) return;
+      const ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN || document.hidden) {
+        // throttle while not ready/hidden
+        setTimeout(() => requestAnimationFrame(sendFrame), 200);
+        return;
+      }
       if (v.videoWidth && v.videoHeight) {
-        const canvas = document.createElement("canvas");
-        canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+        const canvas = (typeof OffscreenCanvas !== "undefined")
+          ? new OffscreenCanvas(v.videoWidth, v.videoHeight)
+          : (() => { const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; return c; })();
+
         const ctx = canvas.getContext("2d", { alpha: false });
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
-        if (b64) { try { ws.send(b64); } catch {} }
+
+        let b64 = "";
+        if ("convertToBlob" in canvas) {
+          // OffscreenCanvas path
+          canvas.convertToBlob({ type: "image/jpeg", quality: 0.8 })
+            .then(blob => blob.arrayBuffer())
+            .then(buf => {
+              b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+              try { if (!stopped) ws.send(b64); } catch {}
+            })
+            .catch(() => {});
+        } else {
+          // HTMLCanvasElement path
+          try { b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1]; } catch {}
+          if (b64) { try { ws.send(b64); } catch {} }
+        }
       }
-      setTimeout(() => requestAnimationFrame(loop), 100);
+      setTimeout(() => requestAnimationFrame(sendFrame), 100);
     };
-    requestAnimationFrame(loop);
-    return () => { stop = true; };
+
+    if ("requestVideoFrameCallback" in (v || {})) {
+      // Use media pipeline callbacks when supported
+      const cb = () => {
+        if (stopped) return;
+        sendFrame();
+        v.requestVideoFrameCallback(cb);
+      };
+      v.requestVideoFrameCallback(cb);
+    } else {
+      requestAnimationFrame(sendFrame);
+    }
+
+    return () => {
+      stopped = true;
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }
 
   async function handleCapture() {
@@ -220,7 +285,7 @@ function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // Keep proximity rule in video coords
+      // Must match backend MIN_ID_W_RATIO=0.55
       const MIN_RATIO = 0.55;
       const vw = v.videoWidth || 0;
       if (w < Math.round(vw * MIN_RATIO)) {
@@ -229,7 +294,7 @@ function LiveIDVerification() {
         return;
       }
 
-      // Full-frame canvas, then crop the exact ROI (to keep best native resolution)
+      // Full frame (native) then crop exact ROI
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
       const fctx = full.getContext("2d", { alpha: false });
@@ -242,7 +307,9 @@ function LiveIDVerification() {
       cctx.imageSmoothingEnabled = false;
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
-      const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
+      const blob = await new Promise((res, rej) =>
+        crop.toBlob(b => b ? res(b) : rej(new Error("Blob encode failed")), "image/jpeg", 0.95)
+      );
 
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
@@ -253,6 +320,8 @@ function LiveIDVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
+      // tidy up
+      try { sendLoopStopRef.current?.(); } catch {}
       if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
@@ -266,8 +335,10 @@ function LiveIDVerification() {
     }
   }
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
+      try { sendLoopStopRef.current?.(); } catch {}
       if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
@@ -276,7 +347,7 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // ---------- STABILIZATION PIPELINE (unchanged) ----------
+  // ---------- Stabilization (unchanged logic) ----------
   useEffect(() => {
     if (!result) return;
 
@@ -427,12 +498,17 @@ function LiveIDVerification() {
             </button>
           )}
           {cameraOn && (
-            <button className="btn btn-success"
-                    onClick={handleCapture}
-                    disabled={!canCapture || isUploading}
-                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
-              {isUploading ? "Capturing…" : "Capture"}
-            </button>
+            <>
+              <button className="btn btn-secondary" onClick={switchCamera} title="Switch camera">
+                Flip
+              </button>
+              <button className="btn btn-success"
+                      onClick={handleCapture}
+                      disabled={!canCapture || isUploading}
+                      title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
+                {isUploading ? "Capturing…" : "Capture"}
+              </button>
+            </>
           )}
         </div>
         <div className="text-light text-center"
