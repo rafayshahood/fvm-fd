@@ -4,6 +4,47 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
+// --- NEW: Minimal full-screen blocking overlay (spinner + message)
+function BlockingOverlay({ text = "Processing… Please wait." }) {
+  return (
+    <div
+      role="alert"
+      aria-busy="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        backdropFilter: "blur(2px)",
+        pointerEvents: "all",
+      }}
+    >
+      <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
+        <circle
+          cx="25" cy="25" r="20"
+          fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" opacity="0.25"
+        />
+        <path
+          fill="none" stroke="white" strokeWidth="5" strokeLinecap="round"
+          d="M25 5 a20 20 0 0 1 0 40"
+        >
+          <animateTransform
+            attributeName="transform" type="rotate"
+            from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite"
+          />
+        </path>
+      </svg>
+      <div style={{ marginTop: 14, color: "#fff", fontSize: 16, textAlign: "center", padding: "6px 10px" }}>
+        {text}
+      </div>
+    </div>
+  );
+}
+
 function LiveVerification() {
   const navigate = useNavigate();
 
@@ -45,6 +86,9 @@ function LiveVerification() {
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
+
+  // NEW: show blocking overlay during upload/processing
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Viewport (use visualViewport height for mobile)
   const [vp, setVp] = useState({
@@ -94,9 +138,7 @@ function LiveVerification() {
     const ellipseCyVid = (ellipseCyDisp - dy) / scale;
 
     return {
-      // for drawing on screen
       disp: { cx: ellipseCxDisp, cy: ellipseCyDisp, rx: ellipseRxDisp, ry: ellipseRyDisp },
-      // for backend gating (video coords)
       vid:  { cx: ellipseCxVid, cy: ellipseCyVid, rx: ellipseRxVid, ry: ellipseRyVid },
     };
   }
@@ -119,7 +161,6 @@ function LiveVerification() {
     const draw = () => {
       const ctx = recCtxRef.current;
       if (!ctx) return;
-      // Draw raw camera pixels (no CSS transforms, no mirroring)
       ctx.drawImage(v, 0, 0, cw, ch);
       recRAFRef.current = requestAnimationFrame(draw);
     };
@@ -142,7 +183,7 @@ function LiveVerification() {
       try { recRef.current.stop(); } catch {}
       recRef.current = null;
     }
-    stopRecCanvasDraw(); // ensure canvas loop is stopped
+    stopRecCanvasDraw();
 
     chunksRef.current = [];
     recordingStartRef.current = null;
@@ -167,6 +208,7 @@ function LiveVerification() {
 
   function handleTimeout() {
     cleanup();
+    setIsProcessing(false); // ensure overlay is gone on timeout
     navigate("/", { replace: true });
     setTimeout(() => {
       if (window.location.pathname !== "/") window.location.assign("/");
@@ -183,7 +225,7 @@ function LiveVerification() {
   }
 
   async function startCamera() {
-    if (startedRef.current) return;
+    if (startedRef.current || isProcessing) return; // block while processing
     startedRef.current = true;
     setStatus("Requesting camera…");
     timeoutIdRef.current = setTimeout(handleTimeout, TIMEOUT_TOTAL_MS);
@@ -192,9 +234,8 @@ function LiveVerification() {
     try {
       await ensureReqId(API_BASE);
 
-      // ⬇️ Minimal constraints — take raw camera stream
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },  // keep selfie lens; no forced size/fps
+        video: { facingMode: "user" },
         audio: false,
       });
       streamRef.current = stream;
@@ -215,7 +256,6 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
-        // Send initial ellipse (in video coords)
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -293,14 +333,11 @@ function LiveVerification() {
         requestAnimationFrame(loop); return;
       }
 
-      // ⬇️ Send RAW sensor frame (no viewport scaling)
       const canvas = document.createElement("canvas");
       canvas.width = v.videoWidth; canvas.height = v.videoHeight;
       const ctx = canvas.getContext("2d");
-      // No mirror here; keep backend & overlay math simple/consistent
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
-      // Occasionally refresh ellipse in VIDEO coordinates (in case orientation/viewport changes)
       if (Math.random() < 0.02) {
         const e = currentDisplayEllipse();
         if (e) {
@@ -321,14 +358,12 @@ function LiveVerification() {
     return () => { stop = true; };
   }
 
-  // UPDATED: record from the offscreen canvas (upright pixels)
+  // Record from the offscreen canvas (upright pixels)
   function startRecording() {
-    if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current) return;
+    if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current || isProcessing) return;
 
-    // 1) start drawing onto offscreen canvas
     startRecCanvasDraw();
 
-    // 2) record the canvas stream, not raw camera stream
     const canvas = recCanvasRef.current;
     const recStream = canvas.captureStream(30);
 
@@ -339,7 +374,6 @@ function LiveVerification() {
 
     mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
     mr.onstop = async () => {
-      // stop canvas loop
       stopRecCanvasDraw();
 
       if (abortingRef.current) {
@@ -357,7 +391,11 @@ function LiveVerification() {
       chunksRef.current = [];
       uploadingRef.current = true;
       hasUploadedRef.current = true;
+
+      // --- NEW: show blocking overlay while uploading
+      setIsProcessing(true);
       await uploadSingle(blob);
+      // NOTE: overlay is intentionally not turned off here because we navigate away on success.
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -380,7 +418,7 @@ function LiveVerification() {
     abortingRef.current = true;
     try { recRef.current.stop(); } catch {}
     recRef.current = null;
-    stopRecCanvasDraw(); // ensure loop stops on abort
+    stopRecCanvasDraw();
     stableStartRef.current = null;
   }
 
@@ -401,6 +439,7 @@ function LiveVerification() {
       await res.json();
 
       cleanup();
+      // Keep overlay visible until we leave the page
       navigate("/", { replace: true });
       setTimeout(() => {
         if (window.location.pathname !== "/") window.location.assign("/");
@@ -408,6 +447,10 @@ function LiveVerification() {
     } catch (e) {
       console.error("Upload error:", e);
       setStatus("Upload error");
+      setIsProcessing(false); // hide overlay on error so user can retry
+      // allow another attempt
+      hasUploadedRef.current = false;
+      uploadingRef.current = false;
     }
   }
 
@@ -443,8 +486,7 @@ function LiveVerification() {
         playsInline
         style={{
           position:"absolute", inset:0, width:"100%", height:"100%",
-          objectFit:"contain" // show full camera feed; no cropping
-          // NOTE: we intentionally do NOT mirror here to keep math aligned with frames sent to backend
+          objectFit:"contain"
         }}
       />
 
@@ -492,7 +534,7 @@ function LiveVerification() {
       )}
 
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
-        <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current}>
+        <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current || isProcessing}>
           {startedRef.current ? 'Camera Started' : 'Start Camera'}
         </button>
         <div className="text-light text-center" style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
@@ -501,6 +543,9 @@ function LiveVerification() {
           {typeof result?.num_faces === "number" ? ` | faces: ${result.num_faces}` : ""}
         </div>
       </div>
+
+      {/* NEW: Block all interaction while uploading/processing */}
+      {isProcessing && <BlockingOverlay text="Uploading your selfie video… Please wait." />}
     </div>
   );
 }

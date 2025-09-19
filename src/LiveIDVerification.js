@@ -1,4 +1,4 @@
-// LiveVerification.jsx
+// LiveIDVerification.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -23,29 +23,51 @@ function BlockingOverlay({ text = "Processing… Please wait." }) {
         pointerEvents: "all",
       }}
     >
+      {/* Inline SVG spinner (no external CSS) */}
       <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
         <circle
-          cx="25" cy="25" r="20"
-          fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" opacity="0.25"
+          cx="25"
+          cy="25"
+          r="20"
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          opacity="0.25"
         />
         <path
-          fill="none" stroke="white" strokeWidth="5" strokeLinecap="round"
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
           d="M25 5 a20 20 0 0 1 0 40"
         >
           <animateTransform
-            attributeName="transform" type="rotate"
-            from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite"
+            attributeName="transform"
+            type="rotate"
+            from="0 25 25"
+            to="360 25 25"
+            dur="0.9s"
+            repeatCount="indefinite"
           />
         </path>
       </svg>
-      <div style={{ marginTop: 14, color: "#fff", fontSize: 16, textAlign: "center", padding: "6px 10px" }}>
+      <div
+        style={{
+          marginTop: 14,
+          color: "#fff",
+          fontSize: 16,
+          textAlign: "center",
+          padding: "6px 10px",
+        }}
+      >
         {text}
       </div>
     </div>
   );
 }
 
-function LiveVerification() {
+function LiveIDVerification() {
   const navigate = useNavigate();
 
   const videoRef = useRef(null);
@@ -53,44 +75,40 @@ function LiveVerification() {
   const wsRef = useRef(null);
   const startedRef = useRef(false);
 
-  // Recording
-  const recRef = useRef(null);
-  const chunksRef = useRef([]);
-  const stableStartRef = useRef(null);
-  const recordingStartRef = useRef(null);
-  const abortingRef = useRef(false);
-
-  // NEW: offscreen canvas for upright recording
-  const recCanvasRef = useRef(null);
-  const recCtxRef = useRef(null);
-  const recRAFRef = useRef(null);
-
-  // Double-upload guards
-  const hasUploadedRef = useRef(false);
-  const uploadingRef = useRef(false);
-
-  const sendTickRef = useRef(0);
-
-  // Timeouts & countdown
-  const timeoutIdRef = useRef(null);
-  const countdownIdRef = useRef(null);
-  const sessionEndAtRef = useRef(null);
-  const [remainingMs, setRemainingMs] = useState(null);
-
-  // Tunables
-  const STABLE_REQUIRED_MS = 1000;
-  const RECORD_TARGET_MS = 8000;
-  const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5;
-  const TIMEOUT_TOTAL_MS = 30000;
-
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [cameraOn, setCameraOn] = useState(false);
 
-  // NEW: show blocking overlay during upload/processing
-  const [isProcessing, setIsProcessing] = useState(false);
+  // ---------- NEW: Grace period / frames-before-judgment ----------
+  const JUDGE_GRACE_MS = 1200;
+  const JUDGE_MIN_FRAMES = 5;
+  const cameraStartAtRef = useRef(0);
+  const framesSeenRef = useRef(0);
 
-  // Viewport (use visualViewport height for mobile)
+  // ---------- STABILITY / HYSTERESIS ----------
+  const BRIGHT_STREAK = 12;
+  const FRAME_COOLDOWN_MS = 1200;
+  const FRAME_OK_MIN = 60,  FRAME_OK_MAX = 190;
+  const FRAME_FAIL_MIN = 50, FRAME_FAIL_MAX = 200;
+
+  const FACE_BRIGHT_STREAK = 12;
+  const FACE_COOLDOWN_MS = 1500;
+  const FACE_OK_MIN = 15,  FACE_OK_MAX = 240;
+  const FACE_FAIL_MIN = 5, FACE_FAIL_MAX = 250;
+
+  const FACE_STREAK   = 4;
+  const IDCARD_STREAK = 6;
+  const INSIDE_STREAK = 8;
+  const GLARE_STREAK  = 10;
+
+  const frameSmoothRef = useRef(null);
+  const faceSmoothRef  = useRef(null);
+  const lastFrameBrightFailAtRef = useRef(0);
+  const lastFaceBrightFailAtRef  = useRef(0);
+  const streaksRef = useRef({ fb:0, idc:0, i:0, g:0, fr_b:0, face_b:0 });
+
+  // ---------- VIEWPORT / OVERLAY ----------
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
     h: typeof window !== "undefined"
@@ -110,7 +128,7 @@ function LiveVerification() {
     };
   }, []);
 
-  // Contain layout: show full sensor without cropping
+  // Contain layout (no cropping)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -119,435 +137,388 @@ function LiveVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // Ellipse defined inside the displayed video (like before, but tied to the video box)
-  function currentDisplayEllipse() {
-    const v = videoRef.current; if (!v) return null;
+  // --- make rect match backend ratios (RECT_W_RATIO=0.95, RECT_H_RATIO=0.45) ---
+  function currentDisplayRect() {
+    const v = videoRef.current;
+    if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
 
-    const ellipseRxDisp = (dispW * 0.9) / 2;
-    const ellipseRyDisp = (dispH * 0.7) / 2;
-    const ellipseCxDisp = dx + dispW / 2;
-    const ellipseCyDisp = dy + dispH / 2;
+    const rectW = dispW * 0.95; // must match id.py RECT_W_RATIO
+    const rectH = dispH * 0.45; // must match id.py RECT_H_RATIO
+    const rectX = dx + (dispW - rectW) / 2;
+    const rectY = dy + (dispH - rectH) / 2;
 
-    // Map displayed ellipse → video pixel coords for backend
-    const ellipseRxVid = ellipseRxDisp / scale;
-    const ellipseRyVid = ellipseRyDisp / scale;
-    const ellipseCxVid = (ellipseCxDisp - dx) / scale;
-    const ellipseCyVid = (ellipseCyDisp - dy) / scale;
-
-    return {
-      disp: { cx: ellipseCxDisp, cy: ellipseCyDisp, rx: ellipseRxDisp, ry: ellipseRyDisp },
-      vid:  { cx: ellipseCxVid, cy: ellipseCyVid, rx: ellipseRxVid, ry: ellipseRyVid },
-    };
+    return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
   }
 
-  // Offscreen canvas drawing for recording upright pixels
-  function startRecCanvasDraw() {
+  function mapBoxToScreen(b) {
     const v = videoRef.current;
-    if (!v) return;
-    const cw = v.videoWidth, ch = v.videoHeight;
-    if (!cw || !ch) return;
-
-    let c = recCanvasRef.current;
-    if (!c) {
-      c = document.createElement("canvas");
-      recCanvasRef.current = c;
-    }
-    c.width = cw; c.height = ch;
-    recCtxRef.current = c.getContext("2d");
-
-    const draw = () => {
-      const ctx = recCtxRef.current;
-      if (!ctx) return;
-      ctx.drawImage(v, 0, 0, cw, ch);
-      recRAFRef.current = requestAnimationFrame(draw);
-    };
-    draw();
+    if (!v || !b || !Array.isArray(b) || b.length !== 4) return null;
+    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
+    if (!vw || !vh) return null;
+    const [x1, y1, x2, y2] = b.map(Number);
+    return { x: dx + x1 * scale, y: dy + y1 * scale, w: (x2 - x1) * scale, h: (y2 - y1) * scale };
   }
 
-  function stopRecCanvasDraw() {
-    if (recRAFRef.current) cancelAnimationFrame(recRAFRef.current);
-    recRAFRef.current = null;
-    recCtxRef.current = null;
+  function mapScreenRectToVideoRect(sx, sy, sw, sh) {
+    const v = videoRef.current;
+    if (!v) return null;
+    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
+    if (!vw || !vh) return null;
+    const x1 = Math.max(0, Math.min(vw, (sx - dx) / scale));
+    const y1 = Math.max(0, Math.min(vh, (sy - dy) / scale));
+    const x2 = Math.max(0, Math.min(vw, (sx + sw - dx) / scale));
+    const y2 = Math.max(0, Math.min(vh, (sy + sh - dy) / scale));
+    const w = Math.max(1, Math.round(x2 - x1));
+    const h = Math.max(1, Math.round(y2 - y1));
+    return { x: Math.round(x1), y: Math.round(y1), w, h };
   }
 
-  function cleanup() {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      try { wsRef.current.close(); } catch {}
+  async function getBestStream() {
+    const trials = [
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
+      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },  audio: false },
+      { video: { facingMode: { ideal: "environment" } }, audio: false },
+    ];
+    let err = null;
+    for (const c of trials) {
+      try { return await navigator.mediaDevices.getUserMedia(c); }
+      catch (e) { err = e; }
     }
-    wsRef.current = null;
-
-    if (recRef.current) {
-      try { recRef.current.stop(); } catch {}
-      recRef.current = null;
-    }
-    stopRecCanvasDraw();
-
-    chunksRef.current = [];
-    recordingStartRef.current = null;
-    abortingRef.current = false;
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      try { videoRef.current.pause(); } catch {}
-      videoRef.current.srcObject = null;
-    }
-
-    if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
-    if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
-    sessionEndAtRef.current = null;
-    setRemainingMs(null);
-
-    startedRef.current = false;
-  }
-
-  function handleTimeout() {
-    cleanup();
-    setIsProcessing(false); // ensure overlay is gone on timeout
-    navigate("/", { replace: true });
-    setTimeout(() => {
-      if (window.location.pathname !== "/") window.location.assign("/");
-    }, 200);
-  }
-
-  function startCountdown() {
-    sessionEndAtRef.current = performance.now() + TIMEOUT_TOTAL_MS;
-    setRemainingMs(TIMEOUT_TOTAL_MS);
-    countdownIdRef.current = setInterval(() => {
-      const left = Math.max(0, sessionEndAtRef.current - performance.now());
-      setRemainingMs(left);
-    }, 200);
+    throw err || new Error("Camera unavailable");
   }
 
   async function startCamera() {
-    if (startedRef.current || isProcessing) return; // block while processing
+    if (startedRef.current) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
-    timeoutIdRef.current = setTimeout(handleTimeout, TIMEOUT_TOTAL_MS);
-    startCountdown();
 
     try {
-      await ensureReqId(API_BASE);
+      const reqId = await ensureReqId(API_BASE);
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
+      const stream = await getBestStream();
       streamRef.current = stream;
+      const v = videoRef.current; if (!v) return;
+      v.srcObject = stream; v.muted = true; v.setAttribute("playsInline", "true");
 
-      const v = videoRef.current;
-      if (!v) return;
-      v.srcObject = stream;
-      v.muted = true;
-      v.playsInline = true;
+      // Try to improve sharpness/exposure on capable devices
+      try {
+        const [track] = stream.getVideoTracks();
+        const caps = track.getCapabilities?.() || {};
+        const cons = {};
+        if (caps.focusMode && caps.focusMode.includes("continuous")) cons.focusMode = "continuous";
+        if (caps.exposureMode && caps.exposureMode.includes("continuous")) cons.exposureMode = "continuous";
+        if (Object.keys(cons).length) await track.applyConstraints({ advanced: [cons] });
+      } catch {}
+
       v.addEventListener("loadedmetadata", function onLoaded() {
         v.removeEventListener("loadedmetadata", onLoaded);
         setStatus(`Video ${v.videoWidth}×${v.videoHeight}`);
-        const p = v.play(); if (p?.catch) p.catch(()=>{});
+        v.play().catch(() => {}); setCameraOn(true);
       });
-      v.addEventListener("canplay", () => setStatus("Camera ready"));
-      v.addEventListener("play", () => setStatus("Streaming…"));
 
-      const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
+      const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => {
-        setStatus((s) => s + " | WS connected");
-        const e = currentDisplayEllipse();
-        if (e) {
-          const { cx, cy, rx, ry } = e.vid;
-          safeSend(ws, JSON.stringify({ ellipseCx: cx, ellipseCy: cy, ellipseRx: rx, ellipseRy: ry }));
-        }
+        setStatus("WS connected, streaming frames…");
+        cameraStartAtRef.current = Date.now();
+        framesSeenRef.current = 0;
       };
-      ws.onerror = () => setStatus((s) => s + " | WS error");
-      ws.onclose = () => setStatus((s) => s + " | WS closed");
+      ws.onclose = () => setStatus("WS closed");
+      ws.onerror = () => setStatus("WS error");
       ws.onmessage = (evt) => {
-        try {
-          const data = JSON.parse(evt.data);
-          setResult(data);
-
-          const enabled = data?.checks || {
-            face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
-          };
-          const passIfEnabled = (flag, condition) => (flag ? !!condition : true);
-          const allGood =
-            passIfEnabled(enabled.face,       data?.face_detected === true) &&
-            passIfEnabled(enabled.ellipse,    data?.inside_ellipse === true) &&
-            passIfEnabled(enabled.brightness, data?.brightness_status === "ok") &&
-            passIfEnabled(enabled.glasses,    data?.glasses_detected !== true) &&
-            passIfEnabled(enabled.spoof,      data?.spoof_is_real !== false);
-
-          const now = performance.now();
-
-          if (allGood && !uploadingRef.current && !hasUploadedRef.current) {
-            if (!stableStartRef.current) stableStartRef.current = now;
-            const stableFor = now - stableStartRef.current;
-            const isRecording = !!recRef.current;
-
-            if (!isRecording && stableFor >= STABLE_REQUIRED_MS) {
-              startRecording();
-            }
-            if (isRecording && recordingStartRef.current) {
-              const recElapsed = now - recordingStartRef.current;
-              if (recElapsed >= RECORD_TARGET_MS) stopRecording();
-            }
-
-            if (recRef.current) {
-              const recElapsed = now - (recordingStartRef.current || now);
-              setStatus(`Recording… ${(Math.min(100, (recElapsed / RECORD_TARGET_MS) * 100)).toFixed(0)}%`);
-            } else {
-              setStatus(`Stable — starting soon… ${(Math.min(100, (stableFor / STABLE_REQUIRED_MS) * 100)).toFixed(0)}%`);
-            }
-          } else {
-            stableStartRef.current = null;
-            if (recRef.current) {
-              abortRecording();
-              setStatus(`Recording aborted`);
-            }
-          }
-        } catch {}
+        try { setResult(JSON.parse(evt.data)); framesSeenRef.current += 1; } catch {}
       };
       wsRef.current = ws;
-
       startSendingFrames();
     } catch (err) {
-      startedRef.current = false;
+      console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
-      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
-      if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
-      setRemainingMs(null);
+      startedRef.current = false; setCameraOn(false);
     }
   }
-
-  function safeSend(ws, payload) { try { ws.send(payload); } catch {} }
 
   function startSendingFrames() {
     let stop = false;
     const loop = () => {
       if (stop) return;
       const v = videoRef.current, ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
-        requestAnimationFrame(loop); return;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
+      if (v.videoWidth && v.videoHeight) {
+        const canvas = document.createElement("canvas");
+        canvas.width = v.videoWidth; canvas.height = v.videoHeight;
+        const ctx = canvas.getContext("2d", { alpha: false });
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+        const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+        if (b64) { try { ws.send(b64); } catch {} }
       }
-
-      const canvas = document.createElement("canvas");
-      canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-
-      if (Math.random() < 0.02) {
-        const e = currentDisplayEllipse();
-        if (e) {
-          const { cx, cy, rx, ry } = e.vid;
-          safeSend(ws, JSON.stringify({ ellipseCx: cx, ellipseCy: cy, ellipseRx: rx, ellipseRy: ry }));
-        }
-      }
-
-      sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
-      if (sendTickRef.current === 0) {
-        const b64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
-        if (b64) safeSend(ws, b64);
-      }
-
-      setTimeout(() => requestAnimationFrame(loop), SEND_FRAME_INTERVAL_MS);
+      setTimeout(() => requestAnimationFrame(loop), 100);
     };
     requestAnimationFrame(loop);
     return () => { stop = true; };
   }
 
-  // Record from the offscreen canvas (upright pixels)
-  function startRecording() {
-    if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current || isProcessing) return;
-
-    startRecCanvasDraw();
-
-    const canvas = recCanvasRef.current;
-    const recStream = canvas.captureStream(30);
-
-    chunksRef.current = [];
-    let mr;
-    try { mr = new MediaRecorder(recStream, { mimeType: "video/webm;codecs=vp9" }); }
-    catch { try { mr = new MediaRecorder(recStream, { mimeType: "video/webm" }); } catch { mr = new MediaRecorder(recStream); } }
-
-    mr.ondataavailable = (e) => { if (e.data && e.data.size) chunksRef.current.push(e.data); };
-    mr.onstop = async () => {
-      stopRecCanvasDraw();
-
-      if (abortingRef.current) {
-        chunksRef.current = [];
-        abortingRef.current = false;
-        recordingStartRef.current = null;
-        return;
-      }
-      if (hasUploadedRef.current) {
-        chunksRef.current = [];
-        recordingStartRef.current = null;
-        return;
-      }
-      const blob = new Blob(chunksRef.current, { type: "video/webm" });
-      chunksRef.current = [];
-      uploadingRef.current = true;
-      hasUploadedRef.current = true;
-
-      // --- NEW: show blocking overlay while uploading
-      setIsProcessing(true);
-      await uploadSingle(blob);
-      // NOTE: overlay is intentionally not turned off here because we navigate away on success.
-      uploadingRef.current = false;
-      recordingStartRef.current = null;
-    };
-
-    mr.start(250);
-    recRef.current = mr;
-    recordingStartRef.current = performance.now();
-    setStatus("Recording…");
-  }
-
-  function stopRecording() {
-    if (!recRef.current) return;
-    try { recRef.current.stop(); } catch {}
-    recRef.current = null;
-    stableStartRef.current = null;
-  }
-
-  function abortRecording() {
-    if (!recRef.current) return;
-    abortingRef.current = true;
-    try { recRef.current.stop(); } catch {}
-    recRef.current = null;
-    stopRecCanvasDraw();
-    stableStartRef.current = null;
-  }
-
-  async function uploadSingle(blob) {
+  async function handleCapture() {
+    if (isUploading || !videoRef.current) return;
     try {
+      setIsUploading(true); // <-- shows blocking overlay
+
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
+      const v = videoRef.current;
+
+      const disp = currentDisplayRect();
+      if (!disp) throw new Error("Camera not ready");
+      const { rectX, rectY, rectW, rectH } = disp;
+
+      const roi = mapScreenRectToVideoRect(rectX, rectY, rectW, rectH);
+      if (!roi) throw new Error("Camera not ready");
+      const { x, y, w, h } = roi;
+
+      // Keep proximity rule in video coords (matches id.py MIN_ID_W_RATIO=0.55)
+      const MIN_RATIO = 0.55;
+      const vw = v.videoWidth || 0;
+      if (w < Math.round(vw * MIN_RATIO)) {
+        alert("Move closer so the ID fills the rectangle.");
+        setIsUploading(false);
+        return;
+      }
+
+      // Full-frame canvas, then crop the exact ROI (to keep best native resolution)
+      const full = document.createElement("canvas");
+      full.width = v.videoWidth; full.height = v.videoHeight;
+      const fctx = full.getContext("2d", { alpha: false });
+      fctx.imageSmoothingEnabled = false;
+      fctx.drawImage(v, 0, 0, full.width, full.height);
+
+      const crop = document.createElement("canvas");
+      crop.width = w; crop.height = h;
+      const cctx = crop.getContext("2d", { alpha: false });
+      cctx.imageSmoothingEnabled = false;
+      cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
+
+      const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
 
       const form = new FormData();
-      form.append("video", blob, "live_capture.webm");
+      form.append("image", blob, "id_roi.jpg");
 
-      const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
-        method: "POST",
-        body: form,
+      const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
+        method: "POST", body: form
       });
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      if (!res.ok) throw new Error("Upload failed");
-      await res.json();
-
-      cleanup();
-      // Keep overlay visible until we leave the page
+      // Clean up and leave
+      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
+      wsRef.current = null;
+      if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+      if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
       navigate("/", { replace: true });
-      setTimeout(() => {
-        if (window.location.pathname !== "/") window.location.assign("/");
-      }, 200);
     } catch (e) {
-      console.error("Upload error:", e);
-      setStatus("Upload error");
-      setIsProcessing(false); // hide overlay on error so user can retry
-      // allow another attempt
-      hasUploadedRef.current = false;
-      uploadingRef.current = false;
+      console.error(e);
+      alert(e.message || "Capture failed");
+    } finally {
+      setIsUploading(false); // <-- hides overlay
     }
   }
 
-  useEffect(() => () => { cleanup(); }, []);
+  useEffect(() => {
+    return () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
+      wsRef.current = null;
+      if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
+      if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
+      startedRef.current = false;
+    };
+  }, []);
+
+  // ---------- STABILIZATION PIPELINE (adjusted to respect size gates) ----------
+  useEffect(() => {
+    if (!result) return;
+
+    const readyToJudge =
+      cameraOn &&
+      framesSeenRef.current >= JUDGE_MIN_FRAMES &&
+      Date.now() - cameraStartAtRef.current >= JUDGE_GRACE_MS;
+
+    if (!readyToJudge) return;
+
+    const frameMean = typeof result.brightness_mean === "number" ? result.brightness_mean : null;
+    let frameOk = false;
+    if (frameMean != null) {
+      if (frameSmoothRef.current == null) frameSmoothRef.current = frameMean;
+      else frameSmoothRef.current = 0.25 * frameMean + 0.75 * frameSmoothRef.current;
+      const m = frameSmoothRef.current;
+      const prevOk = streaksRef.current.fr_b > 0;
+      frameOk = prevOk ? (m >= FRAME_FAIL_MIN && m <= FRAME_FAIL_MAX)
+                       : (m >= FRAME_OK_MIN  && m <= FRAME_OK_MAX);
+      if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
+    } else {
+      frameOk = result.brightness_status === "ok";
+      if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
+    }
+
+    // ---- ONLY judge face brightness AFTER size gates are OK ----
+    const idFillOk  = result?.id_fill_ok === true;
+    const faceSizeOk = result?.face_size_ok === true;
+    const haveFaceBrightness = typeof result?.face_brightness_mean === "number";
+
+    let faceBrightOk = false;
+    if (idFillOk && faceSizeOk && haveFaceBrightness) {
+      const faceMean = result.face_brightness_mean;
+      if (faceSmoothRef.current == null) faceSmoothRef.current = faceMean;
+      else faceSmoothRef.current = 0.25 * faceMean + 0.75 * faceSmoothRef.current;
+      const fm = faceSmoothRef.current;
+      const prevFaceOk = streaksRef.current.face_b > 0;
+      faceBrightOk = prevFaceOk ? (fm >= FACE_FAIL_MIN && fm <= FACE_FAIL_MAX)
+                                : (fm >= FACE_OK_MIN  && fm <= FACE_OK_MAX);
+      if (!faceBrightOk) lastFaceBrightFailAtRef.current = Date.now();
+    } else {
+      faceBrightOk = false;
+    }
+
+    const faceOk   = !!result.face_detected;
+    const idOk     = result.id_card_detected === true;
+    const insideOk = result.id_inside_rect === true;
+    const glareClr = !result.glare_detected;
+
+    streaksRef.current.fr_b   = frameOk      ? streaksRef.current.fr_b + 1   : 0;
+    streaksRef.current.fb     = faceOk       ? streaksRef.current.fb   + 1   : 0;
+    streaksRef.current.idc    = idOk         ? streaksRef.current.idc  + 1   : 0;
+    streaksRef.current.i      = insideOk     ? streaksRef.current.i    + 1   : 0;
+    streaksRef.current.face_b = faceBrightOk ? streaksRef.current.face_b + 1 : 0;
+    streaksRef.current.g      = glareClr     ? streaksRef.current.g    + 1   : 0;
+  }, [result, cameraOn]);
+
+  const now = Date.now();
+  const frameCooldownActive = now - lastFrameBrightFailAtRef.current < FRAME_COOLDOWN_MS;
+  const faceCooldownActive  = now - lastFaceBrightFailAtRef.current  < FACE_COOLDOWN_MS;
+
+  const readyToJudge =
+    cameraOn &&
+    framesSeenRef.current >= JUDGE_MIN_FRAMES &&
+    now - cameraStartAtRef.current >= JUDGE_GRACE_MS;
+
+  const frameBrightStable = streaksRef.current.fr_b   >= BRIGHT_STREAK && !frameCooldownActive;
+  const facePresentStable = streaksRef.current.fb     >= FACE_STREAK;
+  const idCardStable      = streaksRef.current.idc    >= IDCARD_STREAK;
+  const insideStable      = streaksRef.current.i      >= INSIDE_STREAK;
+  const faceBrightStable  = streaksRef.current.face_b >= FACE_BRIGHT_STREAK && !faceCooldownActive;
+  const glareStable       = streaksRef.current.g      >= GLARE_STREAK;
+
+  // include backend size gates in capture readiness
+  const idFillOk   = result?.id_fill_ok === true;
+  const faceSizeOk = result?.face_size_ok === true;
+
+  const canCapture = frameBrightStable && facePresentStable && idCardStable &&
+                     insideStable && idFillOk && faceSizeOk &&
+                     faceBrightStable && glareStable;
 
   const guidance = (() => {
-    if (!result) return "Click Start Camera to begin";
-    const enabled = result?.checks || {
-      face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
-    };
+    if (!cameraOn) return "Tap “Start Camera” to begin.";
+    if (!result) return "Initializing camera…";
+    if (!readyToJudge) return "Checking lighting…";
 
-    if (enabled.brightness && result.brightness_status === "too_dark")   return "💡 Lighting too low — move to a brighter place.";
-    if (enabled.brightness && result.brightness_status === "too_bright") return "☀️ Lighting too strong — reduce direct light.";
-    if (enabled.face && !result.face_detected)                           return "❌ No face detected.";
-    if (enabled.face && result.num_faces > 1)                            return "👥 Multiple faces detected — only you should be in the frame.";
-    if (enabled.glasses && result.glasses_detected === true)             return "🕶️ Please remove glasses.";
-    if (enabled.ellipse && !result.inside_ellipse)                       return "🎯 Please bring your face fully inside the oval.";
-    if (enabled.spoof && result.spoof_is_real === false)                 return "🔒 Possible spoof detected — show your live face clearly.";
-    return recRef.current ? "🎬 Recording… hold steady." : "✅ Perfect — hold steady.";
+    if (!frameBrightStable) {
+      const lbl = result?.brightness_status;
+      if (lbl === "too_dark")   return "💡 Image too dark — adjust lighting.";
+      if (lbl === "too_bright") return "☀️ Image too bright — reduce brightness.";
+      if (frameCooldownActive)  return "⏳ Stabilizing lighting… hold steady.";
+      return "💡 Adjust overall lighting.";
+    }
+    if (!facePresentStable) return "❌ No face detected on ID.";
+    if (!idCardStable)      return "📇 Place the ID card in view.";
+    if (!insideStable)      return "📐 Align the ID fully inside the rectangle.";
+
+    if (!idFillOk)   return "↔️ Move closer so the ID fills the rectangle.";
+    if (!faceSizeOk) return "🔍 ID face too small — move closer.";
+
+    if (!faceBrightStable) {
+      const fl = result?.face_brightness_status;
+      if (fl === "too_dark")   return "💡 Face too dark — add light.";
+      if (fl === "too_bright") return "☀️ Face too bright — reduce glare/brightness.";
+      if (faceCooldownActive)  return "⏳ Stabilizing face exposure… hold steady.";
+      return "💡 Adjust light on the face.";
+    }
+    if (!glareStable)       return "✨ Reduce glare on the ID (tilt slightly).";
+    return "✅ You can capture now.";
   })();
 
-  const remainingSec = remainingMs != null ? Math.ceil(remainingMs / 1000) : null;
+  const rawBox     = mapBoxToScreen(result?.largest_bbox);
+  const idCardBox  = mapBoxToScreen(result?.id_card_bbox);
 
-  const dispEllipse = currentDisplayEllipse(); // for drawing only
-  const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
+  const disp = currentDisplayRect();
+  const showMask = cameraOn && disp;
 
   return (
-    <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
-      <video
-        ref={videoRef}
-        autoPlay
-        muted
-        playsInline
-        style={{
-          position:"absolute", inset:0, width:"100%", height:"100%",
-          objectFit:"contain"
-        }}
-      />
+    <div className="position-relative"
+         style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
+      <video ref={videoRef} autoPlay muted playsInline
+             style={{
+               position:"absolute", inset:0, width:"100%", height:"100%",
+               objectFit:"contain"
+             }} />
 
-      {dispEllipse && (
-        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+      {showMask && (
+        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
+             style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
           <defs>
-            <mask id="cutout-mask-live">
-              <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
-              <ellipse
-                cx={dispEllipse.disp.cx}
-                cy={dispEllipse.disp.cy}
-                rx={dispEllipse.disp.rx}
-                ry={dispEllipse.disp.ry}
-                fill="black"
-              />
+            <mask id="rect-cutout">
+              <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
+              <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                    rx="12" ry="12" fill="black" />
             </mask>
           </defs>
-          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
-          <ellipse
-            cx={dispEllipse.disp.cx}
-            cy={dispEllipse.disp.cy}
-            rx={dispEllipse.disp.rx}
-            ry={dispEllipse.disp.ry}
-            fill="none"
-            stroke="white"
-            strokeWidth="3"
-            strokeDasharray="6 6"
-          />
+          <rect x="0" y="0" width={vp.w} height={vp.h}
+                fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
+          <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
+          {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
+                            fill="none" stroke="#ffd54f" strokeWidth="3" />}
+          {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
+                              fill="none" stroke="#34c759" strokeWidth="3" />}
         </svg>
       )}
 
-      <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
-        <div style={{ maxWidth: 680, width: "100%", textAlign: "center", background: "rgba(0,0,0,0.6)", color: "#fff",
-                      borderRadius: 12, padding: "10px 14px", fontSize: 16, backdropFilter: "blur(4px)" }}>
+      <div className="position-absolute w-100 d-flex justify-content-center"
+           style={{ top: Math.max(16, (disp ? disp.rectY : 0) - 60), left: 0, padding: "0 16px" }}>
+        <div style={{
+          maxWidth: 680, width: "100%", textAlign: "center",
+          background: "rgba(0,0,0,0.6)", color: "#fff",
+          borderRadius: 12, padding: "10px 14px", fontSize: 16, backdropFilter: "blur(4px)",
+        }}>
           {guidance}
         </div>
       </div>
 
-      {remainingSec != null && (
-        <div className="position-absolute" style={{ top: 16, right: 16 }}>
-          <div style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 14 }}>
-            Session ends in <strong>{remainingSec}s</strong>
-          </div>
-        </div>
-      )}
-
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
-        <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current || isProcessing}>
-          {startedRef.current ? 'Camera Started' : 'Start Camera'}
-        </button>
-        <div className="text-light text-center" style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
+        <div className="d-flex gap-2">
+          {!cameraOn && (
+            <button className="btn btn-primary" onClick={() => { startCamera(); setCameraOn(true); }}>
+              Start Camera
+            </button>
+          )}
+          {cameraOn && (
+            <button className="btn btn-success"
+                    onClick={handleCapture}
+                    disabled={!canCapture || isUploading}
+                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
+              {isUploading ? "Capturing…" : "Capture"}
+            </button>
+          )}
+        </div>
+        <div className="text-light text-center"
+             style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
           {status}
-          {result?.skipped ? " | (fast mode)" : ""}
-          {typeof result?.num_faces === "number" ? ` | faces: ${result.num_faces}` : ""}
         </div>
       </div>
 
       {/* NEW: Block all interaction while uploading/processing */}
-      {isProcessing && <BlockingOverlay text="Uploading your selfie video… Please wait." />}
+      {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
     </div>
   );
 }
 
-export default LiveVerification;
+export default LiveIDVerification;
