@@ -270,12 +270,14 @@ function LiveVerification() {
           setResult(data);
 
           const enabled = data?.checks || {
-            face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
+            face: true, ellipse: true, brightness: true, frontal: true, spoof: true, glasses: true,
           };
+            
           const passIfEnabled = (flag, condition) => (flag ? !!condition : true);
           const allGood =
             passIfEnabled(enabled.face,       data?.face_detected === true) &&
             passIfEnabled(enabled.ellipse,    data?.inside_ellipse === true) &&
+            passIfEnabled(enabled.frontal,    data?.front_facing === true) &&
             passIfEnabled(enabled.brightness, data?.brightness_status === "ok") &&
             passIfEnabled(enabled.glasses,    data?.glasses_detected !== true) &&
             passIfEnabled(enabled.spoof,      data?.spoof_is_real !== false);
@@ -459,13 +461,15 @@ function LiveVerification() {
   const guidance = (() => {
     if (!result) return "Click Start Camera to begin";
     const enabled = result?.checks || {
-      face: true, ellipse: true, brightness: true, spoof: true, glasses: true,
+      face: true, ellipse: true, brightness: true, frontal: true, spoof: true, glasses: true,
     };
+
 
     if (enabled.brightness && result.brightness_status === "too_dark")   return "💡 Lighting too low — move to a brighter place.";
     if (enabled.brightness && result.brightness_status === "too_bright") return "☀️ Lighting too strong — reduce direct light.";
     if (enabled.face && !result.face_detected)                           return "❌ No face detected.";
-    if (enabled.face && result.num_faces > 1)                            return "👥 Multiple faces detected — only you should be in the frame.";
+    if (enabled.face && result.num_faces > 1)  
+    if (enabled.frontal && result.front_facing === false)                           return "👥 Multiple faces detected — only you should be in the frame.";
     if (enabled.glasses && result.glasses_detected === true)             return "🕶️ Please remove glasses.";
     if (enabled.ellipse && !result.inside_ellipse)                       return "🎯 Please bring your face fully inside the oval.";
     if (enabled.spoof && result.spoof_is_real === false)                 return "🔒 Possible spoof detected — show your live face clearly.";
