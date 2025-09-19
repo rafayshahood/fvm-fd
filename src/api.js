@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://dome-fallen-democrat-locations.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://prizes-mailing-dressing-hide.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
