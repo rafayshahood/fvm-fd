@@ -31,8 +31,8 @@ function LiveIDVerification() {
 
   const FACE_BRIGHT_STREAK = 12;
   const FACE_COOLDOWN_MS = 1500;
-  const FACE_OK_MIN = 75,  FACE_OK_MAX = 230;
-  const FACE_FAIL_MIN = 65, FACE_FAIL_MAX = 240;
+  const FACE_OK_MIN = 15,  FACE_OK_MAX = 240;
+  const FACE_FAIL_MIN = 5, FACE_FAIL_MAX = 250;
 
   const FACE_STREAK   = 4;
   const IDCARD_STREAK = 6;
@@ -74,7 +74,7 @@ function LiveIDVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // --- CHANGED: make rect match backend ratios exactly (RECT_W_RATIO=0.95, RECT_H_RATIO=0.60) ---
+  // --- make rect match backend ratios (RECT_W_RATIO=0.95, RECT_H_RATIO=0.60) ---
   function currentDisplayRect() {
     const v = videoRef.current;
     if (!v) return null;
@@ -269,7 +269,7 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // ---------- STABILIZATION PIPELINE (unchanged) ----------
+  // ---------- STABILIZATION PIPELINE (adjusted to respect size gates) ----------
   useEffect(() => {
     if (!result) return;
 
@@ -295,9 +295,14 @@ function LiveIDVerification() {
       if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
     }
 
-    const faceMean = typeof result.face_brightness_mean === "number" ? result.face_brightness_mean : null;
+    // ---- NEW: only judge face brightness AFTER size gates are OK ----
+    const idFillOk  = result?.id_fill_ok === true;
+    const faceSizeOk = result?.face_size_ok === true;
+    const haveFaceBrightness = typeof result?.face_brightness_mean === "number";
+
     let faceBrightOk = false;
-    if (faceMean != null) {
+    if (idFillOk && faceSizeOk && haveFaceBrightness) {
+      const faceMean = result.face_brightness_mean;
       if (faceSmoothRef.current == null) faceSmoothRef.current = faceMean;
       else faceSmoothRef.current = 0.25 * faceMean + 0.75 * faceSmoothRef.current;
       const fm = faceSmoothRef.current;
@@ -305,6 +310,9 @@ function LiveIDVerification() {
       faceBrightOk = prevFaceOk ? (fm >= FACE_FAIL_MIN && fm <= FACE_FAIL_MAX)
                                 : (fm >= FACE_OK_MIN  && fm <= FACE_OK_MAX);
       if (!faceBrightOk) lastFaceBrightFailAtRef.current = Date.now();
+    } else {
+      // Don’t penalize brightness streak until size gates are satisfied
+      faceBrightOk = false;
     }
 
     const faceOk   = !!result.face_detected;
@@ -336,8 +344,13 @@ function LiveIDVerification() {
   const faceBrightStable  = streaksRef.current.face_b >= FACE_BRIGHT_STREAK && !faceCooldownActive;
   const glareStable       = streaksRef.current.g      >= GLARE_STREAK;
 
+  // ---- NEW: include backend size gates in capture readiness ----
+  const idFillOk   = result?.id_fill_ok === true;
+  const faceSizeOk = result?.face_size_ok === true;
+
   const canCapture = frameBrightStable && facePresentStable && idCardStable &&
-                     insideStable && faceBrightStable && glareStable;
+                     insideStable && idFillOk && faceSizeOk &&
+                     faceBrightStable && glareStable;
 
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
@@ -354,6 +367,11 @@ function LiveIDVerification() {
     if (!facePresentStable) return "❌ No face detected on ID.";
     if (!idCardStable)      return "📇 Place the ID card in view.";
     if (!insideStable)      return "📐 Align the ID fully inside the rectangle.";
+
+    // ---- NEW: show true blockers before brightness ----
+    if (!idFillOk)   return "↔️ Move closer so the ID fills the rectangle.";
+    if (!faceSizeOk) return "🔍 ID face too small — move closer.";
+
     if (!faceBrightStable) {
       const fl = result?.face_brightness_status;
       if (fl === "too_dark")   return "💡 Face too dark — add light.";
