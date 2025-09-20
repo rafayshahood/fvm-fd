@@ -1,73 +1,28 @@
-// LiveIDVerification.jsx
+// LiveIDVerification.jsx (simple: no grace, no streaks, no cooldowns)
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
-// --- NEW: Minimal full-screen blocking overlay (spinner + message)
 function BlockingOverlay({ text = "Processing… Please wait." }) {
   return (
-    <div
-      role="alert"
-      aria-busy="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.65)",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
-        backdropFilter: "blur(2px)",
-        pointerEvents: "all",
-      }}
-    >
-      {/* Inline SVG spinner (no external CSS) */}
+    <div role="alert" aria-busy="true" style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,0.65)",
+      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+      zIndex:9999, backdropFilter:"blur(2px)", pointerEvents:"all"
+    }}>
       <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
-        <circle
-          cx="25"
-          cy="25"
-          r="20"
-          fill="none"
-          stroke="white"
-          strokeWidth="5"
-          strokeLinecap="round"
-          opacity="0.25"
-        />
-        <path
-          fill="none"
-          stroke="white"
-          strokeWidth="5"
-          strokeLinecap="round"
-          d="M25 5 a20 20 0 0 1 0 40"
-        >
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 25 25"
-            to="360 25 25"
-            dur="0.9s"
-            repeatCount="indefinite"
-          />
+        <circle cx="25" cy="25" r="20" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" opacity="0.25" />
+        <path fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" d="M25 5 a20 20 0 0 1 0 40">
+          <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite" />
         </path>
       </svg>
-      <div
-        style={{
-          marginTop: 14,
-          color: "#fff",
-          fontSize: 16,
-          textAlign: "center",
-          padding: "6px 10px",
-        }}
-      >
-        {text}
-      </div>
+      <div style={{ marginTop:14, color:"#fff", fontSize:16, textAlign:"center", padding:"6px 10px" }}>{text}</div>
     </div>
   );
 }
 
-function LiveIDVerification() {
+export default function LiveIDVerification() {
   const navigate = useNavigate();
 
   const videoRef = useRef(null);
@@ -80,46 +35,13 @@ function LiveIDVerification() {
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ---------- NEW: Grace period / frames-before-judgment ----------
-  const JUDGE_GRACE_MS = 1200;
-  const JUDGE_MIN_FRAMES = 2;
-  const cameraStartAtRef = useRef(0);
-  const framesSeenRef = useRef(0);
-
-  // ---------- STABILITY / HYSTERESIS ----------
-  const BRIGHT_STREAK = 6;
-  const FRAME_COOLDOWN_MS = 600;
-  const FRAME_OK_MIN = 60,  FRAME_OK_MAX = 190;
-  const FRAME_FAIL_MIN = 50, FRAME_FAIL_MAX = 200;
-
-  const FACE_BRIGHT_STREAK = 12;
-  const FACE_COOLDOWN_MS = 1500;
-  const FACE_OK_MIN = 15,  FACE_OK_MAX = 240;
-  const FACE_FAIL_MIN = 5, FACE_FAIL_MAX = 250;
-
-  const FACE_STREAK   = 4;
-  const IDCARD_STREAK = 6;
-  const INSIDE_STREAK = 8;
-  const GLARE_STREAK  = 10;
-
-  const frameSmoothRef = useRef(null);
-  const faceSmoothRef  = useRef(null);
-  const lastFrameBrightFailAtRef = useRef(0);
-  const lastFaceBrightFailAtRef  = useRef(0);
-  const streaksRef = useRef({ fb:0, idc:0, i:0, g:0, fr_b:0, face_b:0 });
-
-  // ---------- VIEWPORT / OVERLAY ----------
+  // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
-    h: typeof window !== "undefined"
-      ? (window.visualViewport?.height ?? window.innerHeight)
-      : 0,
+    h: typeof window !== "undefined" ? (window.visualViewport?.height ?? window.innerHeight) : 0,
   });
   useEffect(() => {
-    const onResize = () => setVp({
-      w: window.innerWidth,
-      h: window.visualViewport?.height ?? window.innerHeight,
-    });
+    const onResize = () => setVp({ w: window.innerWidth, h: window.visualViewport?.height ?? window.innerHeight });
     window.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("resize", onResize);
     return () => {
@@ -128,45 +50,39 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // Contain layout (no cropping)
   function containLayout(containerW, containerH, vidW, vidH) {
-    if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
+    if (!vidW || !vidH) return { scale:1, dx:0, dy:0, dispW:0, dispH:0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
-    const dispW = vidW * scale;
-    const dispH = vidH * scale;
-    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
+    const dispW = vidW * scale, dispH = vidH * scale;
+    return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
   }
 
-  // --- make rect match backend ratios (RECT_W_RATIO=0.95, RECT_H_RATIO=0.45) ---
+  // must match backend RECT_W_RATIO=0.95, RECT_H_RATIO=0.45
   function currentDisplayRect() {
-    const v = videoRef.current;
-    if (!v) return null;
+    const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
-
-    const rectW = dispW * 0.95; // must match id.py RECT_W_RATIO
-    const rectH = dispH * 0.45; // must match id.py RECT_H_RATIO
+    const rectW = dispW * 0.95;
+    const rectH = dispH * 0.45;
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
-
     return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
   }
 
   function mapBoxToScreen(b) {
-    const v = videoRef.current;
-    if (!v || !b || !Array.isArray(b) || b.length !== 4) return null;
-    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
+    const v = videoRef.current; if (!v || !b || b.length !== 4) return null;
+    const geo = currentDisplayRect(); if (!geo) return null;
+    const { vw, vh, scale, dx, dy } = geo;
     if (!vw || !vh) return null;
-    const [x1, y1, x2, y2] = b.map(Number);
-    return { x: dx + x1 * scale, y: dy + y1 * scale, w: (x2 - x1) * scale, h: (y2 - y1) * scale };
+    const [x1,y1,x2,y2] = b.map(Number);
+    return { x: dx + x1*scale, y: dy + y1*scale, w: (x2-x1)*scale, h:(y2-y1)*scale };
   }
 
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
-    const v = videoRef.current;
-    if (!v) return null;
-    const { vw, vh, scale, dx, dy } = currentDisplayRect() || {};
-    if (!vw || !vh) return null;
+    const v = videoRef.current; if (!v) return null;
+    const geo = currentDisplayRect(); if (!geo) return null;
+    const { vw, vh, scale, dx, dy } = geo;
     const x1 = Math.max(0, Math.min(vw, (sx - dx) / scale));
     const y1 = Math.max(0, Math.min(vh, (sy - dy) / scale));
     const x2 = Math.max(0, Math.min(vw, (sx + sw - dx) / scale));
@@ -178,15 +94,12 @@ function LiveIDVerification() {
 
   async function getBestStream() {
     const trials = [
-      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false },
-      { video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },  audio: false },
-      { video: { facingMode: { ideal: "environment" } }, audio: false },
+      { video: { facingMode:{ ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } }, audio:false },
+      { video: { facingMode:{ ideal:"environment" }, width:{ ideal:1280 }, height:{ ideal:720 } },  audio:false },
+      { video: { facingMode:{ ideal:"environment" } }, audio:false },
     ];
     let err = null;
-    for (const c of trials) {
-      try { return await navigator.mediaDevices.getUserMedia(c); }
-      catch (e) { err = e; }
-    }
+    for (const c of trials) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { err = e; } }
     throw err || new Error("Camera unavailable");
   }
 
@@ -194,16 +107,14 @@ function LiveIDVerification() {
     if (startedRef.current) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
-
     try {
       const reqId = await ensureReqId(API_BASE);
-
       const stream = await getBestStream();
       streamRef.current = stream;
       const v = videoRef.current; if (!v) return;
-      v.srcObject = stream; v.muted = true; v.setAttribute("playsInline", "true");
+      v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
 
-      // Try to improve sharpness/exposure on capable devices
+      // try best AF/AE on capable devices
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -220,16 +131,10 @@ function LiveIDVerification() {
       });
 
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
-      ws.onopen = () => {
-        setStatus("WS connected, streaming frames…");
-        cameraStartAtRef.current = Date.now();
-        framesSeenRef.current = 0;
-      };
+      ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
-      ws.onmessage = (evt) => {
-        try { setResult(JSON.parse(evt.data)); framesSeenRef.current += 1; } catch {}
-      };
+      ws.onmessage = (evt) => { try { setResult(JSON.parse(evt.data)); } catch {} };
       wsRef.current = ws;
       startSendingFrames();
     } catch (err) {
@@ -248,7 +153,7 @@ function LiveIDVerification() {
       if (v.videoWidth && v.videoHeight) {
         const canvas = document.createElement("canvas");
         canvas.width = v.videoWidth; canvas.height = v.videoHeight;
-        const ctx = canvas.getContext("2d", { alpha: false });
+        const ctx = canvas.getContext("2d", { alpha:false });
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
         const b64 = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
@@ -263,7 +168,7 @@ function LiveIDVerification() {
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
-      setIsUploading(true); // <-- shows blocking overlay
+      setIsUploading(true);
 
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
@@ -277,7 +182,7 @@ function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // Keep proximity rule in video coords (matches id.py MIN_ID_W_RATIO=0.55)
+      // keep proximity rule in FE to avoid bad uploads (MIN_ID_W_RATIO=0.55)
       const MIN_RATIO = 0.55;
       const vw = v.videoWidth || 0;
       if (w < Math.round(vw * MIN_RATIO)) {
@@ -286,41 +191,39 @@ function LiveIDVerification() {
         return;
       }
 
-      // Full-frame canvas, then crop the exact ROI (to keep best native resolution)
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
-      const fctx = full.getContext("2d", { alpha: false });
+      const fctx = full.getContext("2d", { alpha:false });
       fctx.imageSmoothingEnabled = false;
       fctx.drawImage(v, 0, 0, full.width, full.height);
 
       const crop = document.createElement("canvas");
       crop.width = w; crop.height = h;
-      const cctx = crop.getContext("2d", { alpha: false });
+      const cctx = crop.getContext("2d", { alpha:false });
       cctx.imageSmoothingEnabled = false;
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
       const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
-
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
 
       const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
-        method: "POST", body: form
+        method:"POST", body: form
       });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // Clean up and leave
+      // clean up and leave
       if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
       if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
-      navigate("/", { replace: true });
+      navigate("/", { replace:true });
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
     } finally {
-      setIsUploading(false); // <-- hides overlay
+      setIsUploading(false);
     }
   }
 
@@ -334,132 +237,58 @@ function LiveIDVerification() {
     };
   }, []);
 
-  // ---------- STABILIZATION PIPELINE (adjusted to respect size gates) ----------
-  useEffect(() => {
-    if (!result) return;
-
-    const readyToJudge =
-      cameraOn &&
-      framesSeenRef.current >= JUDGE_MIN_FRAMES &&
-      Date.now() - cameraStartAtRef.current >= JUDGE_GRACE_MS;
-
-    if (!readyToJudge) return;
-
-    const frameMean = typeof result.brightness_mean === "number" ? result.brightness_mean : null;
-    let frameOk = false;
-    if (frameMean != null) {
-      if (frameSmoothRef.current == null) frameSmoothRef.current = frameMean;
-      else frameSmoothRef.current = 0.25 * frameMean + 0.75 * frameSmoothRef.current;
-      const m = frameSmoothRef.current;
-      const prevOk = streaksRef.current.fr_b > 0;
-      frameOk = prevOk ? (m >= FRAME_FAIL_MIN && m <= FRAME_FAIL_MAX)
-                       : (m >= FRAME_OK_MIN  && m <= FRAME_OK_MAX);
-      if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
-    } else {
-      frameOk = result.brightness_status === "ok";
-      if (!frameOk) lastFrameBrightFailAtRef.current = Date.now();
-    }
-
-    // ---- ONLY judge face brightness AFTER size gates are OK ----
-    const idFillOk  = result?.id_fill_ok === true;
-    const faceSizeOk = result?.face_size_ok === true;
-    const haveFaceBrightness = typeof result?.face_brightness_mean === "number";
-
-    let faceBrightOk = false;
-    if (idFillOk && faceSizeOk && haveFaceBrightness) {
-      const faceMean = result.face_brightness_mean;
-      if (faceSmoothRef.current == null) faceSmoothRef.current = faceMean;
-      else faceSmoothRef.current = 0.25 * faceMean + 0.75 * faceSmoothRef.current;
-      const fm = faceSmoothRef.current;
-      const prevFaceOk = streaksRef.current.face_b > 0;
-      faceBrightOk = prevFaceOk ? (fm >= FACE_FAIL_MIN && fm <= FACE_FAIL_MAX)
-                                : (fm >= FACE_OK_MIN  && fm <= FACE_OK_MAX);
-      if (!faceBrightOk) lastFaceBrightFailAtRef.current = Date.now();
-    } else {
-      faceBrightOk = false;
-    }
-
-    const faceOk   = !!result.face_detected;
-    const idOk     = result.id_card_detected === true;
-    const insideOk = result.id_inside_rect === true;
-    const glareClr = !result.glare_detected;
-
-    streaksRef.current.fr_b   = frameOk      ? streaksRef.current.fr_b + 1   : 0;
-    streaksRef.current.fb     = faceOk       ? streaksRef.current.fb   + 1   : 0;
-    streaksRef.current.idc    = idOk         ? streaksRef.current.idc  + 1   : 0;
-    streaksRef.current.i      = insideOk     ? streaksRef.current.i    + 1   : 0;
-    streaksRef.current.face_b = faceBrightOk ? streaksRef.current.face_b + 1 : 0;
-    streaksRef.current.g      = glareClr     ? streaksRef.current.g    + 1   : 0;
-  }, [result, cameraOn]);
-
-  const now = Date.now();
-  const frameCooldownActive = now - lastFrameBrightFailAtRef.current < FRAME_COOLDOWN_MS;
-  const faceCooldownActive  = now - lastFaceBrightFailAtRef.current  < FACE_COOLDOWN_MS;
-
-  const readyToJudge =
-    cameraOn &&
-    framesSeenRef.current >= JUDGE_MIN_FRAMES &&
-    now - cameraStartAtRef.current >= JUDGE_GRACE_MS;
-
-  const frameBrightStable = streaksRef.current.fr_b   >= BRIGHT_STREAK && !frameCooldownActive;
-  const facePresentStable = streaksRef.current.fb     >= FACE_STREAK;
-  const idCardStable      = streaksRef.current.idc    >= IDCARD_STREAK;
-  const insideStable      = streaksRef.current.i      >= INSIDE_STREAK;
-  const faceBrightStable  = streaksRef.current.face_b >= FACE_BRIGHT_STREAK && !faceCooldownActive;
-  const glareStable       = streaksRef.current.g      >= GLARE_STREAK;
-
-  // include backend size gates in capture readiness
-  const idFillOk   = result?.id_fill_ok === true;
-  const faceSizeOk = result?.face_size_ok === true;
-
-  const canCapture = frameBrightStable && facePresentStable && idCardStable &&
-                     insideStable && idFillOk && faceSizeOk &&
-                     faceBrightStable && glareStable;
-
+  // --- Simple guidance directly from backend (no waiting) ---
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
-    if (!result) return "Initializing camera…";
-    if (!readyToJudge) return "Checking lighting…";
+    if (!result)   return "Connecting…";
 
-    if (!frameBrightStable) {
-      const lbl = result?.brightness_status;
-      if (lbl === "too_dark")   return "💡 Image too dark — adjust lighting.";
-      if (lbl === "too_bright") return "☀️ Image too bright — reduce brightness.";
-      if (frameCooldownActive)  return "⏳ Stabilizing lighting… hold steady.";
+    // 1) frame brightness gate comes first
+    const b = result.brightness_status;
+    if (b !== "ok") {
+      if (b === "too_dark")   return "💡 Image too dark — adjust lighting.";
+      if (b === "too_bright") return "☀️ Image too bright — reduce brightness.";
       return "💡 Adjust overall lighting.";
     }
-    if (!facePresentStable) return "❌ No face detected on ID.";
-    if (!idCardStable)      return "📇 Place the ID card in view.";
-    if (!insideStable)      return "📐 Align the ID fully inside the rectangle.";
 
-    if (!idFillOk)   return "↔️ Move closer so the ID fills the rectangle.";
-    if (!faceSizeOk) return "🔍 ID face too small — move closer.";
+    // 2..n) directly mirror backend conditions
+    if (!result.id_card_detected)  return "📇 Place the ID card in view.";
+    if (!result.id_inside_rect)    return "📐 Align the ID fully inside the rectangle.";
+    if (!result.face_detected)     return "❌ No face detected on the ID.";
+    if (!result.id_fill_ok)        return "↔️ Move closer so the ID fills the rectangle.";
+    if (!result.face_size_ok)      return "🔍 ID face too small — move closer.";
 
-    if (!faceBrightStable) {
-      const fl = result?.face_brightness_status;
-      if (fl === "too_dark")   return "💡 Face too dark — add light.";
-      if (fl === "too_bright") return "☀️ Face too bright — reduce glare/brightness.";
-      if (faceCooldownActive)  return "⏳ Stabilizing face exposure… hold steady.";
+    const fb = result.face_brightness_status;
+    if (fb && fb !== "ok") {
+      if (fb === "too_dark")   return "💡 Face too dark — add light.";
+      if (fb === "too_bright") return "☀️ Face too bright — reduce glare/brightness.";
       return "💡 Adjust light on the face.";
     }
-    if (!glareStable)       return "✨ Reduce glare on the ID (tilt slightly).";
+
+    if (result.glare_detected) return "✨ Reduce glare on the ID (tilt slightly).";
     return "✅ You can capture now.";
   })();
 
-  const rawBox     = mapBoxToScreen(result?.largest_bbox);
-  const idCardBox  = mapBoxToScreen(result?.id_card_bbox);
+  // For optional button gating (purely UI); you can ignore this and always enable capture
+  const canCapture =
+    !!result &&
+    result.brightness_status === "ok" &&
+    result.id_card_detected === true &&
+    result.id_inside_rect === true &&
+    result.face_detected === true &&
+    result.id_fill_ok === true &&
+    result.face_size_ok === true &&
+    (result.face_brightness_status === null || result.face_brightness_status === "ok") &&
+    !result.glare_detected;
 
+  const rawBox    = mapBoxToScreen(result?.largest_bbox);
+  const idCardBox = mapBoxToScreen(result?.id_card_bbox);
   const disp = currentDisplayRect();
   const showMask = cameraOn && disp;
 
   return (
-    <div className="position-relative"
-         style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
+    <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
       <video ref={videoRef} autoPlay muted playsInline
-             style={{
-               position:"absolute", inset:0, width:"100%", height:"100%",
-               objectFit:"contain"
-             }} />
+        style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }} />
 
       {showMask && (
         <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
@@ -471,8 +300,7 @@ function LiveIDVerification() {
                     rx="12" ry="12" fill="black" />
             </mask>
           </defs>
-          <rect x="0" y="0" width={vp.w} height={vp.h}
-                fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
+          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
           <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
                 rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
           {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
@@ -485,15 +313,15 @@ function LiveIDVerification() {
       <div className="position-absolute w-100 d-flex justify-content-center"
            style={{ top: Math.max(16, (disp ? disp.rectY : 0) - 60), left: 0, padding: "0 16px" }}>
         <div style={{
-          maxWidth: 680, width: "100%", textAlign: "center",
-          background: "rgba(0,0,0,0.6)", color: "#fff",
-          borderRadius: 12, padding: "10px 14px", fontSize: 16, backdropFilter: "blur(4px)",
+          maxWidth:680, width:"100%", textAlign:"center",
+          background:"rgba(0,0,0,0.6)", color:"#fff",
+          borderRadius:12, padding:"10px 14px", fontSize:16, backdropFilter:"blur(4px)"
         }}>
           {guidance}
         </div>
       </div>
 
-      <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
+      <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom:24, left:0, gap:8 }}>
         <div className="d-flex gap-2">
           {!cameraOn && (
             <button className="btn btn-primary" onClick={() => { startCamera(); setCameraOn(true); }}>
@@ -501,10 +329,11 @@ function LiveIDVerification() {
             </button>
           )}
           {cameraOn && (
-            <button className="btn btn-success"
+            <button className="btn btn成功"
                     onClick={handleCapture}
-                    disabled={!canCapture || isUploading}
-                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
+                    // If you want pure "no gating", leave only isUploading here:
+                    disabled={isUploading}
+                    title={canCapture ? "Capture ID still" : "You can still capture; backend will validate."}>
               {isUploading ? "Capturing…" : "Capture"}
             </button>
           )}
@@ -515,10 +344,7 @@ function LiveIDVerification() {
         </div>
       </div>
 
-      {/* NEW: Block all interaction while uploading/processing */}
       {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
     </div>
   );
 }
-
-export default LiveIDVerification;
