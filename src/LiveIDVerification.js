@@ -87,8 +87,8 @@ function LiveIDVerification() {
   const framesSeenRef = useRef(0);
 
   // ---------- STABILITY / HYSTERESIS ----------
-  const BRIGHT_STREAK = 12;
-  const FRAME_COOLDOWN_MS = 1200;
+  const BRIGHT_STREAK = 6;
+  const FRAME_COOLDOWN_MS = 600;
   const FRAME_OK_MIN = 60,  FRAME_OK_MAX = 190;
   const FRAME_FAIL_MIN = 50, FRAME_FAIL_MAX = 200;
 
