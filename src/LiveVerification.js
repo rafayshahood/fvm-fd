@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
 import { ensureReqId, getReqId } from "./storage";
 
-// --- Minimal full-screen blocking overlay (spinner + message)
+// Minimal full-screen blocking overlay (spinner + message)
 function BlockingOverlay({ text = "Processing… Please wait." }) {
   return (
     <div
@@ -71,17 +71,18 @@ function LiveVerification() {
 
   const sendTickRef = useRef(0);
 
-  // Timeouts & countdown
+  // Session timeout & countdown (start ONLY when analyzer is ready)
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
+  const analyzerReadyRef = useRef(false); // NEW: flips on first analyzer payload
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
   const STABLE_REQUIRED_MS = 1000;
   const RECORD_TARGET_MS = 8000;
   const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5;
+  const SEND_EVERY_NTH_FRAME = 5; // 5fps regardless of camera FPS
   const TIMEOUT_TOTAL_MS = 30000;
 
   const [status, setStatus] = useState("Idle");
@@ -119,7 +120,7 @@ function LiveVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
-  // Ellipse defined inside the displayed video (like before, but tied to the video box)
+  // Ellipse defined inside the displayed video (mapped to video coords for backend)
   function currentDisplayEllipse() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
@@ -173,6 +174,13 @@ function LiveVerification() {
     recCtxRef.current = null;
   }
 
+  function clearTimers() {
+    if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
+    if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
+    sessionEndAtRef.current = null;
+    setRemainingMs(null);
+  }
+
   function cleanup() {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       try { wsRef.current.close(); } catch {}
@@ -198,12 +206,9 @@ function LiveVerification() {
       videoRef.current.srcObject = null;
     }
 
-    if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
-    if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
-    sessionEndAtRef.current = null;
-    setRemainingMs(null);
-
+    clearTimers();
     startedRef.current = false;
+    analyzerReadyRef.current = false;
   }
 
   function handleTimeout() {
@@ -215,21 +220,21 @@ function LiveVerification() {
     }, 200);
   }
 
-  function startCountdown() {
+  function startCountdownAndTimeout() {
+    // Start the 30s window only when analyzer is ready (first payload)
     sessionEndAtRef.current = performance.now() + TIMEOUT_TOTAL_MS;
     setRemainingMs(TIMEOUT_TOTAL_MS);
     countdownIdRef.current = setInterval(() => {
       const left = Math.max(0, sessionEndAtRef.current - performance.now());
       setRemainingMs(left);
     }, 200);
+    timeoutIdRef.current = setTimeout(handleTimeout, TIMEOUT_TOTAL_MS);
   }
 
   async function startCamera() {
     if (startedRef.current || isProcessing) return; // block while processing
     startedRef.current = true;
     setStatus("Requesting camera…");
-    timeoutIdRef.current = setTimeout(handleTimeout, TIMEOUT_TOTAL_MS);
-    startCountdown();
 
     try {
       await ensureReqId(API_BASE);
@@ -256,6 +261,7 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
+        // Send ellipse immediately
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -264,15 +270,21 @@ function LiveVerification() {
       };
       ws.onerror = () => setStatus((s) => s + " | WS error");
       ws.onclose = () => setStatus((s) => s + " | WS closed");
+
       ws.onmessage = (evt) => {
         try {
           const data = JSON.parse(evt.data);
           setResult(data);
 
+          // FIRST analyzer payload → start the 30s session now
+          if (!analyzerReadyRef.current) {
+            analyzerReadyRef.current = true;
+            startCountdownAndTimeout();
+          }
+
           const enabled = data?.checks || {
             face: true, ellipse: true, brightness: true, frontal: true, spoof: true, glasses: true,
           };
-
           const passIfEnabled = (flag, condition) => (flag ? !!condition : true);
 
           const allGood =
@@ -315,13 +327,34 @@ function LiveVerification() {
       };
       wsRef.current = ws;
 
+      // Resend ellipse on resize (keeps backend in sync)
+      const resendOnResize = () => {
+        const e = currentDisplayEllipse();
+        const ws2 = wsRef.current;
+        if (ws2 && ws2.readyState === WebSocket.OPEN && e) {
+          const { cx, cy, rx, ry } = e.vid;
+          safeSend(ws2, JSON.stringify({ ellipseCx: cx, ellipseCy: cy, ellipseRx: rx, ellipseRy: ry }));
+        }
+      };
+      window.addEventListener("resize", resendOnResize);
+      window.addEventListener("orientationchange", resendOnResize);
+
+      // Start streaming frames (5 fps)
       startSendingFrames();
+
+      // Clean window listeners on unmount
+      const clean = () => {
+        window.removeEventListener("resize", resendOnResize);
+        window.removeEventListener("orientationchange", resendOnResize);
+      };
+      // ensure removal on unmount
+      setTimeout(() => {
+        if (!startedRef.current) clean();
+      }, 0);
     } catch (err) {
       startedRef.current = false;
       setStatus(err?.message || "Camera unavailable. Check permissions.");
-      if (timeoutIdRef.current) { clearTimeout(timeoutIdRef.current); timeoutIdRef.current = null; }
-      if (countdownIdRef.current) { clearInterval(countdownIdRef.current); countdownIdRef.current = null; }
-      setRemainingMs(null);
+      clearTimers();
     }
   }
 
@@ -433,14 +466,28 @@ function LiveVerification() {
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
+      // 1) Upload & wait for conversion to finish (endpoint blocks until mp4 is saved)
       const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
         body: form,
       });
-
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
+      // 2) Stay on this page with the blocking overlay UNTIL backend state flips
+      //    to video_verified === true, so Home shows “Video Verified” immediately.
+      const deadline = Date.now() + 20000; // wait up to 20s (usually far less)
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const stRes = await fetch(`${API_BASE}/req/state/${reqId}`, { cache: "no-store" });
+        const st = await stRes.json();
+        const ready = !!st?.state?.video_verified;
+        if (ready) break;
+        if (Date.now() > deadline) break; // fail-safe: don’t trap the user forever
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      // 3) Now teardown and go Home
       cleanup();
       navigate("/", { replace: true });
       setTimeout(() => {
@@ -543,6 +590,7 @@ function LiveVerification() {
           {status}
           {result?.skipped ? " | (fast mode)" : ""}
           {typeof result?.num_faces === "number" ? ` | faces: ${result.num_faces}` : ""}
+          {!analyzerReadyRef.current ? " | Connecting to analyzer…" : ""}
         </div>
       </div>
 

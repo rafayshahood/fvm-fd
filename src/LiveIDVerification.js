@@ -150,7 +150,7 @@ export default function LiveIDVerification() {
     let sending = false;
     let lastSentAt = 0;
     let frameCounter = 0;
-    const TARGET_FPS = 60;
+    const TARGET_FPS = 30;
     const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS); // ~200ms
     const MAX_BUFFERED = 256 * 1024; // 256KB
 
