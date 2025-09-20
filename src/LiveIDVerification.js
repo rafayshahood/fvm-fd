@@ -286,7 +286,7 @@ export default function LiveIDVerification() {
     if (!result.id_inside_rect)    return "📐 Align the ID fully inside the rectangle.";
     if (!result.face_detected)     return "❌ No face detected on the ID.";
     if (!result.id_fill_ok)        return "↔️ Move closer so the ID fills the rectangle.";
-    if (!result.face_size_ok)      return "🔍 ID face too small — move closer.";
+    if (!result.face_size_ok)      return "🔍 ID face either too small or Unclear.";
 
     const fb = result.face_brightness_status;
     if (fb && fb !== "ok") {
