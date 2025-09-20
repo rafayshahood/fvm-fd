@@ -1,4 +1,4 @@
-// LiveIDVerification.jsx (simple + throttled sender)
+// LiveIDVerification.jsx (no grace, no streaks, no cooldowns) — sends ~5 fps
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -29,7 +29,6 @@ export default function LiveIDVerification() {
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const startedRef = useRef(false);
-  const stopSenderRef = useRef(null); // <-- disposer for throttled sender
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
@@ -104,64 +103,6 @@ export default function LiveIDVerification() {
     throw err || new Error("Camera unavailable");
   }
 
-  // --- Throttled sender: exact `fps` frames/sec with backpressure guards
-  function startSendingFrames({ fps = 5, maxWidth = 960, quality = 0.6, maxBuffered = 256 * 1024 } = {}) {
-    let stop = false;
-    let timer = null;
-    let sending = false;
-
-    const period = Math.max(1, Math.round(1000 / fps));
-
-    const sendOne = () => {
-      if (stop) return;
-      const v = videoRef.current;
-      const ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN) return;
-      if (sending) return;
-      if (ws.bufferedAmount > maxBuffered) return;
-      if (!v.videoWidth || !v.videoHeight) return;
-
-      sending = true;
-      try {
-        const scale = Math.min(1, maxWidth / v.videoWidth);
-        const tw = Math.max(1, Math.round(v.videoWidth * scale));
-        const th = Math.max(1, Math.round(v.videoHeight * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = tw; canvas.height = th;
-        const ctx = canvas.getContext("2d", { alpha: false });
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(v, 0, 0, tw, th);
-        const b64 = canvas.toDataURL("image/jpeg", quality).split(",")[1];
-        if (b64) ws.send(b64);
-      } catch (_) {
-        // ignore
-      } finally {
-        sending = false;
-      }
-    };
-
-    timer = setInterval(sendOne, period);
-
-    const onVis = () => {
-      if (document.visibilityState === "hidden") {
-        if (timer) { clearInterval(timer); timer = null; }
-      } else if (!timer && !stop) {
-        timer = setInterval(sendOne, period);
-      }
-    };
-    document.addEventListener("visibilitychange", onVis);
-
-    // kick an immediate first send
-    sendOne();
-
-    // disposer
-    return () => {
-      stop = true;
-      if (timer) clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }
-
   async function startCamera() {
     if (startedRef.current) return;
     startedRef.current = true;
@@ -190,23 +131,69 @@ export default function LiveIDVerification() {
       });
 
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
-      ws.onopen = () => {
-        setStatus("WS connected, streaming frames…");
-        // start throttled sender once the socket is open
-        stopSenderRef.current = startSendingFrames({ fps: 5, maxWidth: 960, quality: 0.6 });
-      };
-      ws.onclose = (evt) => {
-        setStatus(`WS closed${evt?.code ? ` (${evt.code})` : ""}`);
-        if (stopSenderRef.current) { stopSenderRef.current(); stopSenderRef.current = null; }
-      };
+      ws.onopen = () => setStatus("WS connected, streaming frames…");
+      ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
       ws.onmessage = (evt) => { try { setResult(JSON.parse(evt.data)); } catch {} };
       wsRef.current = ws;
+      startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
       startedRef.current = false; setCameraOn(false);
     }
+  }
+
+  // --- SEND LOOP: ~5 fps + “every 5th frame” fallback, with backpressure
+  function startSendingFrames() {
+    let stop = false;
+    let sending = false;
+    let lastSentAt = 0;
+    let frameCounter = 0;
+    const TARGET_FPS = 5;
+    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS); // ~200ms
+    const MAX_BUFFERED = 256 * 1024; // 256KB
+
+    const loop = () => {
+      if (stop) return;
+      const v = videoRef.current, ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
+
+      const now = performance.now();
+      frameCounter += 1;
+
+      // time throttle (primary) + every-5th-frame (fallback)
+      const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
+      const ratioOk = (frameCounter % 5 === 0);
+      if (!timeOk && !ratioOk) { requestAnimationFrame(loop); return; }
+
+      if (sending) { requestAnimationFrame(loop); return; }
+      if (ws.bufferedAmount > MAX_BUFFERED) { requestAnimationFrame(loop); return; }
+      if (!(v.videoWidth && v.videoHeight)) { requestAnimationFrame(loop); return; }
+
+      sending = true;
+      try {
+        // downscale for bandwidth (keeps aspect)
+        const maxW = 960;
+        const scale = Math.min(1, maxW / v.videoWidth);
+        const W = Math.round(v.videoWidth * scale);
+        const H = Math.round(v.videoHeight * scale);
+
+        const canvas = document.createElement("canvas");
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext("2d", { alpha:false });
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(v, 0, 0, W, H);
+        const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
+        if (b64) { try { ws.send(b64); lastSentAt = now; } catch {} }
+      } finally {
+        sending = false;
+        setTimeout(() => requestAnimationFrame(loop), 16); // allow UI to breathe
+      }
+    };
+
+    requestAnimationFrame(loop);
+    return () => { stop = true; };
   }
 
   async function handleCapture() {
@@ -258,9 +245,8 @@ export default function LiveIDVerification() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
       // clean up and leave
-      try { wsRef.current?.close(); } catch {}
+      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
-      if (stopSenderRef.current) { stopSenderRef.current(); stopSenderRef.current = null; }
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
       if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
       navigate("/", { replace:true });
@@ -274,9 +260,8 @@ export default function LiveIDVerification() {
 
   useEffect(() => {
     return () => {
-      try { wsRef.current?.close(); } catch {}
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
       wsRef.current = null;
-      if (stopSenderRef.current) { stopSenderRef.current(); stopSenderRef.current = null; }
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
       if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
       startedRef.current = false;
@@ -314,7 +299,7 @@ export default function LiveIDVerification() {
     return "✅ You can capture now.";
   })();
 
-  // Optional UI gating (can be ignored and leave button always enabled)
+  // Button gating: only allow capture when backend conditions are all green
   const canCapture =
     !!result &&
     result.brightness_status === "ok" &&
@@ -377,8 +362,8 @@ export default function LiveIDVerification() {
           {cameraOn && (
             <button className="btn btn-success"
                     onClick={handleCapture}
-                    disabled={isUploading}
-                    title={canCapture ? "Capture ID still" : "You can still capture; backend will validate."}>
+                    disabled={!canCapture || isUploading}
+                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
               {isUploading ? "Capturing…" : "Capture"}
             </button>
           )}
