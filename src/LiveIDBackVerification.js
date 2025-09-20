@@ -1,4 +1,4 @@
-// LiveIDVerification.jsx (no grace, no streaks, no cooldowns) — sends ~5 fps
+// LiveIDBackVerification.jsx
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -22,7 +22,7 @@ function BlockingOverlay({ text = "Processing… Please wait." }) {
   );
 }
 
-export default function LiveIDVerification() {
+export default function LiveIDBackVerification() {
   const navigate = useNavigate();
 
   const videoRef = useRef(null);
@@ -35,7 +35,6 @@ export default function LiveIDVerification() {
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
     h: typeof window !== "undefined" ? (window.visualViewport?.height ?? window.innerHeight) : 0,
@@ -57,7 +56,7 @@ export default function LiveIDVerification() {
     return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
   }
 
-  // must match backend RECT_W_RATIO=0.95, RECT_H_RATIO=0.45
+  // Keep the same guide rectangle (helps users frame the back cleanly)
   function currentDisplayRect() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
@@ -68,15 +67,6 @@ export default function LiveIDVerification() {
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
     return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
-  }
-
-  function mapBoxToScreen(b) {
-    const v = videoRef.current; if (!v || !b || b.length !== 4) return null;
-    const geo = currentDisplayRect(); if (!geo) return null;
-    const { vw, vh, scale, dx, dy } = geo;
-    if (!vw || !vh) return null;
-    const [x1,y1,x2,y2] = b.map(Number);
-    return { x: dx + x1*scale, y: dy + y1*scale, w: (x2-x1)*scale, h:(y2-y1)*scale };
   }
 
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
@@ -114,7 +104,6 @@ export default function LiveIDVerification() {
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
 
-      // try best AF/AE on capable devices
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -130,7 +119,7 @@ export default function LiveIDVerification() {
         v.play().catch(() => {}); setCameraOn(true);
       });
 
-      const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
+      const ws = new WebSocket(`${WS_BASE}/ws-id-back-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
@@ -144,41 +133,35 @@ export default function LiveIDVerification() {
     }
   }
 
-  // --- SEND LOOP: ~5 fps + “every 5th frame” fallback, with backpressure
+  // ~5fps; throttle + every-5th-frame fallback + backpressure
   function startSendingFrames() {
     let stop = false;
     let sending = false;
     let lastSentAt = 0;
     let frameCounter = 0;
-    const TARGET_FPS = 30;
-    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS); // ~200ms
-    const MAX_BUFFERED = 256 * 1024; // 256KB
+    const MIN_INTERVAL_MS = 200; // ~5 fps time throttle
+    const MAX_BUFFERED = 256 * 1024;
 
     const loop = () => {
       if (stop) return;
       const v = videoRef.current, ws = wsRef.current;
       if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
+      if (!(v.videoWidth && v.videoHeight)) { requestAnimationFrame(loop); return; }
 
       const now = performance.now();
       frameCounter += 1;
-
-      // time throttle (primary) + every-5th-frame (fallback)
       const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
       const ratioOk = (frameCounter % 5 === 0);
       if (!timeOk && !ratioOk) { requestAnimationFrame(loop); return; }
 
-      if (sending) { requestAnimationFrame(loop); return; }
-      if (ws.bufferedAmount > MAX_BUFFERED) { requestAnimationFrame(loop); return; }
-      if (!(v.videoWidth && v.videoHeight)) { requestAnimationFrame(loop); return; }
+      if (sending || ws.bufferedAmount > MAX_BUFFERED) { requestAnimationFrame(loop); return; }
 
       sending = true;
       try {
-        // downscale for bandwidth (keeps aspect)
         const maxW = 960;
         const scale = Math.min(1, maxW / v.videoWidth);
         const W = Math.round(v.videoWidth * scale);
         const H = Math.round(v.videoHeight * scale);
-
         const canvas = document.createElement("canvas");
         canvas.width = W; canvas.height = H;
         const ctx = canvas.getContext("2d", { alpha:false });
@@ -188,7 +171,7 @@ export default function LiveIDVerification() {
         if (b64) { try { ws.send(b64); lastSentAt = now; } catch {} }
       } finally {
         sending = false;
-        setTimeout(() => requestAnimationFrame(loop), 16); // allow UI to breathe
+        setTimeout(() => requestAnimationFrame(loop), 16);
       }
     };
 
@@ -200,7 +183,6 @@ export default function LiveIDVerification() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
-
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
@@ -208,12 +190,11 @@ export default function LiveIDVerification() {
       const disp = currentDisplayRect();
       if (!disp) throw new Error("Camera not ready");
       const { rectX, rectY, rectW, rectH } = disp;
-
       const roi = mapScreenRectToVideoRect(rectX, rectY, rectW, rectH);
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // keep proximity rule in FE to avoid bad uploads (MIN_ID_W_RATIO=0.55)
+      // keep the proximity rule so the back is readable
       const MIN_RATIO = 0.55;
       const vw = v.videoWidth || 0;
       if (w < Math.round(vw * MIN_RATIO)) {
@@ -236,9 +217,9 @@ export default function LiveIDVerification() {
 
       const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
       const form = new FormData();
-      form.append("image", blob, "id_roi.jpg");
+      form.append("image", blob, "id_back_roi.jpg");
 
-      const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
+      const resp = await fetch(`${API_BASE}/upload-id-back-still?req_id=${encodeURIComponent(reqId)}`, {
         method:"POST", body: form
       });
       const data = await resp.json();
@@ -258,86 +239,44 @@ export default function LiveIDVerification() {
     }
   }
 
-  useEffect(() => {
-    return () => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
-      wsRef.current = null;
-      if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-      if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
-      startedRef.current = false;
-    };
-  }, []);
-
-  // --- Simple guidance directly from backend (no waiting) ---
+  // Guidance: ONLY brightness + ID presence
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result)   return "Connecting…";
-
-    // 1) frame brightness gate comes first
-    const b = result.brightness_status;
-    if (b !== "ok") {
-      if (b === "too_dark")   return "💡 Image too dark — adjust lighting.";
-      if (b === "too_bright") return "☀️ Image too bright — reduce brightness.";
+    if (result.brightness_status !== "ok") {
+      if (result.brightness_status === "too_dark")   return "💡 Image too dark — adjust lighting.";
+      if (result.brightness_status === "too_bright") return "☀️ Image too bright — reduce brightness.";
       return "💡 Adjust overall lighting.";
     }
-
-    // 2..n) directly mirror backend conditions
-    if (!result.id_card_detected)  return "📇 Place the ID card in view.";
-    if (!result.id_inside_rect)    return "📐 Align the ID fully inside the rectangle.";
-    if (!result.face_detected)     return "❌ No face detected on the ID.";
-    if (!result.id_fill_ok)        return "↔️ Move closer so the ID fills the rectangle.";
-    if (!result.face_size_ok)      return "🔍 ID face too small — move closer.";
-
-    const fb = result.face_brightness_status;
-    if (fb && fb !== "ok") {
-      if (fb === "too_dark")   return "💡 Face too dark — add light.";
-      if (fb === "too_bright") return "☀️ Face too bright — reduce glare/brightness.";
-      return "💡 Adjust light on the face.";
-    }
-
-    if (result.glare_detected) return "✨ Reduce glare on the ID (tilt slightly).";
+    if (!result.id_card_detected) return "📇 Place the ID back in view.";
     return "✅ You can capture now.";
   })();
 
-  // Button gating: only allow capture when backend conditions are all green
   const canCapture =
     !!result &&
     result.brightness_status === "ok" &&
-    result.id_card_detected === true &&
-    result.id_inside_rect === true &&
-    result.face_detected === true &&
-    result.id_fill_ok === true &&
-    result.face_size_ok === true &&
-    (result.face_brightness_status === null || result.face_brightness_status === "ok") &&
-    !result.glare_detected;
+    result.id_card_detected === true;
 
-  const rawBox    = mapBoxToScreen(result?.largest_bbox);
-  const idCardBox = mapBoxToScreen(result?.id_card_bbox);
   const disp = currentDisplayRect();
-  const showMask = cameraOn && disp;
 
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
       <video ref={videoRef} autoPlay muted playsInline
         style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }} />
 
-      {showMask && (
+      {disp && (
         <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
              style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
           <defs>
-            <mask id="rect-cutout">
+            <mask id="rect-cutout-back">
               <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
               <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
                     rx="12" ry="12" fill="black" />
             </mask>
           </defs>
-          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
+          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout-back)" />
           <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
                 rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
-          {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
-                            fill="none" stroke="#ffd54f" strokeWidth="3" />}
-          {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                              fill="none" stroke="#34c759" strokeWidth="3" />}
         </svg>
       )}
 
@@ -363,7 +302,7 @@ export default function LiveIDVerification() {
             <button className="btn btn-success"
                     onClick={handleCapture}
                     disabled={!canCapture || isUploading}
-                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
+                    title={canCapture ? "Capture ID back" : "Meet on-screen conditions to enable capture"}>
               {isUploading ? "Capturing…" : "Capture"}
             </button>
           )}
@@ -374,7 +313,7 @@ export default function LiveIDVerification() {
         </div>
       </div>
 
-      {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
+      {isUploading && <BlockingOverlay text="Processing your ID back… Please wait." />}
     </div>
   );
 }

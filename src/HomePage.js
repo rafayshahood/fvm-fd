@@ -9,7 +9,8 @@ function HomePage() {
   const [verifiedAvg, setVerifiedAvg] = useState(32);
   const [manualAvgMin, setManualAvgMin] = useState(24);
 
-  const [idVerified, setIdVerified] = useState(false);
+  const [idVerified, setIdVerified] = useState(false);       // front
+  const [idBackVerified, setIdBackVerified] = useState(false); // back (NEW)
   const [videoVerified, setVideoVerified] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
@@ -38,6 +39,7 @@ function HomePage() {
       const data = await res.json();
       const st = data?.state || {};
       setIdVerified(!!st.id_verified);
+      setIdBackVerified(!!st.id_back_verified); // NEW
       setVideoVerified(!!st.video_verified);
     } catch (e) {
       console.error('state refresh failed', e);
@@ -46,16 +48,13 @@ function HomePage() {
 
   // Short polling window to catch the moment video.mp4 lands on the backend
   function maybeStartShortPolling() {
-    // if already verified or a poll is running, do nothing
     if (videoVerified || pollTimerRef.current) return;
-
     // poll for up to 30s from now
     pollEndAtRef.current = Date.now() + 30_000;
     pollTimerRef.current = setInterval(async () => {
       try {
         await refreshState();
       } finally {
-        // stop when verified or when time window expires
         if (videoVerified || Date.now() > pollEndAtRef.current) {
           clearInterval(pollTimerRef.current);
           pollTimerRef.current = null;
@@ -108,6 +107,7 @@ function HomePage() {
     e.preventDefault();
     const rid = getReqId();
     if (!rid) { alert('No request id. Refresh the page.'); return; }
+    // Submission gating unchanged: requires front ID + video
     if (!idVerified || !videoVerified) {
       alert('Please complete ID and Video verification first.');
       return;
@@ -154,17 +154,30 @@ function HomePage() {
           <h4 className="text-center mb-4">Verification</h4>
 
           <fieldset disabled={cardDisabled}>
-            {/* Document ID */}
+            {/* Document ID (Front) */}
             <div className="mb-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
-                <label className="form-label mb-0">Document ID</label>
+                <label className="form-label mb-0">Document ID (Front)</label>
                 {idVerified && (
                   <span className="badge bg-success px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
-                    <span>✔</span><span>ID Verified</span>
+                    <span>✔</span><span>Front Verified</span>
                   </span>
                 )}
               </div>
-              <Link to="/live-id" className="btn btn-primary w-100">Verify ID</Link>
+              <Link to="/live-id" className="btn btn-primary w-100">Verify ID (Front)</Link>
+            </div>
+
+            {/* Document ID (Back) */}
+            <div className="mb-3">
+              <div className="d-flex justify-content-between align-items-center mb-2">
+                <label className="form-label mb-0">Document ID (Back)</label>
+                {idBackVerified && (
+                  <span className="badge bg-success px-3 py-2 rounded-pill d-flex align-items-center" style={{ gap: 8 }}>
+                    <span>✔</span><span>Back Verified</span>
+                  </span>
+                )}
+              </div>
+              <Link to="/live-id-back" className="btn btn-primary w-100">Verify ID (Back)</Link>
             </div>
 
             {/* Video */}
@@ -189,7 +202,7 @@ function HomePage() {
                 Verify Video
               </Link>
 
-              {!idVerified && <div className="form-text mt-1">Complete ID verification first to enable this.</div>}
+              {!idVerified && <div className="form-text mt-1">Complete ID (Front) verification first to enable this.</div>}
             </div>
 
             {/* Thresholds (UI only) */}
@@ -226,13 +239,16 @@ function HomePage() {
                 </div>
               </div>
 
-              <button type="submit" className={`btn w-100 ${idVerified && videoVerified ? 'btn-primary' : 'btn-secondary'}`}
-                      disabled={!(idVerified && videoVerified) || cardDisabled}>
+              <button
+                type="submit"
+                className={`btn w-100 ${idVerified && videoVerified ? 'btn-primary' : 'btn-secondary'}`}
+                disabled={!(idVerified && videoVerified) || cardDisabled}
+              >
                 {cardDisabled ? 'Submitting…' : 'Submit for Verification'}
               </button>
 
               {!(idVerified && videoVerified) && !cardDisabled && (
-                <div className="form-text mt-2">Complete ID and Video verification to submit.</div>
+                <div className="form-text mt-2">Complete ID (Front) and Video verification to submit.</div>
               )}
             </form>
           </fieldset>
