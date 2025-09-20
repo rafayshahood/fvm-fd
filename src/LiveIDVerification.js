@@ -82,7 +82,7 @@ function LiveIDVerification() {
 
   // ---------- NEW: Grace period / frames-before-judgment ----------
   const JUDGE_GRACE_MS = 1200;
-  const JUDGE_MIN_FRAMES = 5;
+  const JUDGE_MIN_FRAMES = 2;
   const cameraStartAtRef = useRef(0);
   const framesSeenRef = useRef(0);
 
