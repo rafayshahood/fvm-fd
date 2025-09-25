@@ -741,3 +741,50 @@ function LiveVerification() {
               transition: 'stroke 0.3s ease'
             }}
           />
+        </svg>
+      )}
+
+      {/* ANIMATION OPTION 1: Pulsing Recording Indicator with Circular Progress Ring */}
+      {recRef.current && (
+        <RecordingIndicator progress={Math.floor(recordingProgress)} />
+      )}
+
+      {/* ANIMATION OPTION 2: Corner Recording Badge with Waveform */}
+      {recRef.current && (
+        <RecordingBadge progress={recordingProgress} />
+      )}
+
+      <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
+        <div style={{ maxWidth: 680, width: "100%", textAlign: "center", background: "rgba(0,0,0,0.6)", color: "#fff",
+                      borderRadius: 12, padding: "10px 14px", fontSize: 16, backdropFilter: "blur(4px)" }}>
+          {guidance}
+        </div>
+      </div>
+
+      {remainingSec != null && (
+        <div className="position-absolute" style={{ top: 16, right: 16 }}>
+          <div style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 14 }}>
+            Session ends in <strong>{remainingSec}s</strong>
+          </div>
+        </div>
+      )}
+
+      <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
+        <button className="btn btn-success" onClick={startCamera} disabled={startedRef.current || isProcessing}>
+          {startedRef.current ? 'Camera Started' : 'Start Camera'}
+        </button>
+        <div className="text-light text-center" style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
+          {status}
+          {result?.skipped ? " | (fast mode)" : ""}
+          {typeof result?.num_faces === "number" ? ` | faces: ${result.num_faces}` : ""}
+          {!analyzerReadyRef.current ? " | Connecting to analyzer…" : ""}
+        </div>
+      </div>
+
+      {/* Block all interaction while uploading/processing */}
+      {isProcessing && <BlockingOverlay text="Uploading your selfie video… Please wait." />}
+    </div>
+  );
+}
+
+export default LiveVerification;
