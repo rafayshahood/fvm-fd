@@ -107,22 +107,16 @@ export default function LiveIDVerification() {
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
-    const dispW = vidW * scale;
-    const dispH = vidH * scale;
-    return {
-      scale,
-      dx: (containerW - dispW) / 2,
-      dy: (containerH - dispH) / 2,
-      dispW,
-      dispH,
-    };
+    const dispW = vidW * scale,
+      dispH = vidH * scale;
+    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
   function currentDisplayRect() {
     const v = videoRef.current;
     if (!v) return null;
-    const vw = v.videoWidth || 0;
-    const vh = v.videoHeight || 0;
+    const vw = v.videoWidth || 0,
+      vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
     return { scale, dx, dy, dispW, dispH, vw, vh };
@@ -231,12 +225,10 @@ export default function LiveIDVerification() {
         v.removeEventListener("loadedmetadata", onLoaded);
         setStatus(`Video ${v.videoWidth}×${v.videoHeight}`);
         v.play().catch(() => {});
-        setCameraOn(true); // status row appears only after this
+        setCameraOn(true); // status bar will start rendering only after this
       });
 
-      const ws = new WebSocket(
-        `${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`
-      );
+      const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
@@ -267,8 +259,8 @@ export default function LiveIDVerification() {
 
     const loop = () => {
       if (stop) return;
-      const v = videoRef.current;
-      const ws = wsRef.current;
+      const v = videoRef.current,
+        ws = wsRef.current;
       if (!v || !ws || ws.readyState !== WebSocket.OPEN) {
         requestAnimationFrame(loop);
         return;
@@ -277,7 +269,7 @@ export default function LiveIDVerification() {
       const now = performance.now();
       frameCounter += 1;
       const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
-      const ratioOk = frameCounter % 3 === 0; // send at least every 3rd frame
+      const ratioOk = frameCounter % 5 === 0;
       if (!timeOk && !ratioOk) {
         requestAnimationFrame(loop);
         return;
@@ -298,7 +290,7 @@ export default function LiveIDVerification() {
 
       sending = true;
       try {
-        const maxW = 960; // downscale for bandwidth
+        const maxW = 960;
         const scale = Math.min(1, maxW / v.videoWidth);
         const W = Math.round(v.videoWidth * scale);
         const H = Math.round(v.videoHeight * scale);
@@ -328,7 +320,7 @@ export default function LiveIDVerification() {
     };
   }
 
-  // AUTO-CAPTURE when all gates pass (client crops ROI & uploads)
+  // AUTO-CAPTURE when all gates pass (unchanged)
   useEffect(() => {
     const allGreen =
       !!result &&
@@ -352,8 +344,8 @@ export default function LiveIDVerification() {
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      const fw = result?.frame_w;
-      const fh = result?.frame_h;
+      const fw = result?.frame_w,
+        fh = result?.frame_h;
       if (!fw || !fh) throw new Error("No backend frame size.");
 
       const guideOnScreen = guideRect;
@@ -367,7 +359,6 @@ export default function LiveIDVerification() {
       );
       if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
 
-      // draw full frame
       const full = document.createElement("canvas");
       full.width = v.videoWidth;
       full.height = v.videoHeight;
@@ -375,7 +366,6 @@ export default function LiveIDVerification() {
       fctx.imageSmoothingEnabled = false;
       fctx.drawImage(v, 0, 0, full.width, full.height);
 
-      // crop ROI (guide rect)
       const crop = document.createElement("canvas");
       crop.width = w;
       crop.height = h;
@@ -383,9 +373,7 @@ export default function LiveIDVerification() {
       cctx.imageSmoothingEnabled = false;
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
-      const blob = await new Promise((res) =>
-        crop.toBlob(res, "image/jpeg", 0.95)
-      );
+      const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
 
@@ -472,20 +460,16 @@ export default function LiveIDVerification() {
   })();
 
   // Overlay geometry
-  const fw = result?.frame_w;
-  const fh = result?.frame_h;
+  const fw = result?.frame_w,
+    fh = result?.frame_h;
   const backendGuide =
     result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
   const guideRect = backendGuide || localGuideRect(); // always show something once cameraOn
 
   const idCardBox =
-    result?.id_card_bbox && fw && fh
-      ? mapBoxToScreen(result.id_card_bbox, fw, fh)
-      : null;
+    result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
   const faceBox =
-    result?.largest_bbox && fw && fh
-      ? mapBoxToScreen(result.largest_bbox, fw, fh)
-      : null;
+    result?.largest_bbox && fw && fh ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
   // OCR metrics (debug line)
   const fmt = (v, d = 2) =>
@@ -506,25 +490,14 @@ export default function LiveIDVerification() {
   return (
     <div
       className="position-relative"
-      style={{
-        width: "100vw",
-        height: "100dvh",
-        overflow: "hidden",
-        background: "#000",
-      }}
+      style={{ width: "100vw", height: "100dvh", overflow: "hidden", background: "#000" }}
     >
       <video
         ref={videoRef}
         autoPlay
         muted
         playsInline
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-        }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
       />
 
       {cameraOn && guideRect && (
@@ -639,7 +612,7 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Guidance banner — "just above" the rectangle */}
+      {/* Guidance banner — "just above" the rectangle (closer than before) */}
       {cameraOn && guideRect && (
         <div
           className="position-absolute w-100 d-flex justify-content-center"
@@ -665,17 +638,14 @@ export default function LiveIDVerification() {
 
       {/* Start Camera button — visible until camera is on */}
       {!cameraOn && (
-        <div
-          className="position-absolute w-100 d-flex justify-content-center"
-          style={{ bottom: 32, left: 0 }}
-        >
+        <div className="position-absolute w-100 d-flex justify-content-center" style={{ bottom: 32, left: 0 }}>
           <button className="btn btn-primary" onClick={startCamera}>
             Start Camera
           </button>
         </div>
       )}
 
-      {/* Bottom status — HIDDEN until camera is on */}
+      {/* Bottom status — HIDDEN until camera is on (fixes overlap with Start button) */}
       {cameraOn && (
         <div
           className="position-absolute w-100 d-flex flex-column align-items-center"
@@ -695,9 +665,7 @@ export default function LiveIDVerification() {
         </div>
       )}
 
-      {isUploading && (
-        <BlockingOverlay text="Processing your ID… Please wait." />
-      )}
+      {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
     </div>
   );
 }

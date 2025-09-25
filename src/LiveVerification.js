@@ -75,7 +75,7 @@ function LiveVerification() {
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
-  const analyzerReadyRef = useRef(false); // NEW: flips on first analyzer payload
+  const analyzerReadyRef = useRef(false); // flips on first analyzer payload
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
@@ -144,6 +144,36 @@ function LiveVerification() {
     };
   }
 
+  // ---------- Recording Progress Ring (NEW) ----------
+  // Progress ring state (0..1) and a RAF handle for smooth updates
+  const [recProgress, setRecProgress] = useState(0);
+  const isRecordingRef = useRef(false);
+  const recProgRAFRef = useRef(null);
+
+  // Ramanujan circumference approximation for an ellipse
+  function ellipsePerimeter(rx, ry) {
+    const a = Math.max(0, rx), b = Math.max(0, ry);
+    return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
+  }
+
+  // Smoothly update progress while recording
+  function startRecProgressLoop() {
+    cancelRecProgressLoop();
+    const loop = () => {
+      if (!isRecordingRef.current || !recordingStartRef.current) return;
+      const elapsed = performance.now() - recordingStartRef.current;
+      const p = Math.max(0, Math.min(1, elapsed / RECORD_TARGET_MS));
+      setRecProgress(p);
+      recProgRAFRef.current = requestAnimationFrame(loop);
+    };
+    recProgRAFRef.current = requestAnimationFrame(loop);
+  }
+  function cancelRecProgressLoop() {
+    if (recProgRAFRef.current) cancelAnimationFrame(recProgRAFRef.current);
+    recProgRAFRef.current = null;
+  }
+  // -----------------------------------------------
+
   // Offscreen canvas drawing for recording upright pixels
   function startRecCanvasDraw() {
     const v = videoRef.current;
@@ -209,6 +239,11 @@ function LiveVerification() {
     clearTimers();
     startedRef.current = false;
     analyzerReadyRef.current = false;
+
+    // progress ring reset
+    isRecordingRef.current = false;
+    cancelRecProgressLoop();
+    setRecProgress(0);
   }
 
   function handleTimeout() {
@@ -440,6 +475,11 @@ function LiveVerification() {
     recRef.current = mr;
     recordingStartRef.current = performance.now();
     setStatus("Recording…");
+
+    // progress ring
+    isRecordingRef.current = true;
+    setRecProgress(0);
+    startRecProgressLoop();
   }
 
   function stopRecording() {
@@ -447,6 +487,11 @@ function LiveVerification() {
     try { recRef.current.stop(); } catch {}
     recRef.current = null;
     stableStartRef.current = null;
+
+    // progress ring ends at full
+    isRecordingRef.current = false;
+    cancelRecProgressLoop();
+    setRecProgress(1);
   }
 
   function abortRecording() {
@@ -456,6 +501,11 @@ function LiveVerification() {
     recRef.current = null;
     stopRecCanvasDraw();
     stableStartRef.current = null;
+
+    // progress ring reset
+    isRecordingRef.current = false;
+    cancelRecProgressLoop();
+    setRecProgress(0);
   }
 
   async function uploadSingle(blob) {
@@ -540,7 +590,12 @@ function LiveVerification() {
       />
 
       {dispEllipse && (
-        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+        <svg
+          width={vp.w}
+          height={vp.h}
+          viewBox={`0 0 ${vp.w} ${vp.h}`}
+          style={{ position:"absolute", inset:0, pointerEvents:"none" }}
+        >
           <defs>
             <mask id="cutout-mask-live">
               <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
@@ -553,7 +608,11 @@ function LiveVerification() {
               />
             </mask>
           </defs>
+
+          {/* Dark overlay with cutout */}
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
+
+          {/* Guide ellipse (existing, dashed) */}
           <ellipse
             cx={dispEllipse.disp.cx}
             cy={dispEllipse.disp.cy}
@@ -564,6 +623,35 @@ function LiveVerification() {
             strokeWidth="3"
             strokeDasharray="6 6"
           />
+
+          {/* Recording progress ring (NEW) */}
+          {isRecordingRef.current && (() => {
+            const cx = dispEllipse.disp.cx;
+            const cy = dispEllipse.disp.cy;
+            const rx = dispEllipse.disp.rx;
+            const ry = dispEllipse.disp.ry;
+            const L = ellipsePerimeter(rx, ry); // approximate length
+            const dash = L;
+            const offset = (1 - recProgress) * L;
+
+            return (
+              <g transform={`rotate(-90 ${cx} ${cy})`}>
+                <ellipse
+                  cx={cx}
+                  cy={cy}
+                  rx={rx}
+                  ry={ry}
+                  fill="none"
+                  stroke="limegreen"
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray={dash}
+                  strokeDashoffset={offset}
+                  opacity="0.95"
+                />
+              </g>
+            );
+          })()}
         </svg>
       )}
 
