@@ -75,14 +75,14 @@ function LiveVerification() {
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
-  const analyzerReadyRef = useRef(false); // flips on first analyzer payload
+  const analyzerReadyRef = useRef(false);
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
   const STABLE_REQUIRED_MS = 1000;
   const RECORD_TARGET_MS = 8000;
   const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5; // 5fps regardless of camera FPS
+  const SEND_EVERY_NTH_FRAME = 5;
   const TIMEOUT_TOTAL_MS = 30000;
 
   const [status, setStatus] = useState("Idle");
@@ -144,7 +144,7 @@ function LiveVerification() {
     };
   }
 
-  // ---------- Recording Progress Ring ----------
+  // ---------- Recording Progress (color-wipe) ----------
   const [recProgress, setRecProgress] = useState(0);
   const isRecordingRef = useRef(false);
   const recProgRAFRef = useRef(null);
@@ -170,7 +170,7 @@ function LiveVerification() {
     if (recProgRAFRef.current) cancelAnimationFrame(recProgRAFRef.current);
     recProgRAFRef.current = null;
   }
-  // ---------------------------------------------
+  // -----------------------------------------------------
 
   // Offscreen canvas drawing for recording upright pixels
   function startRecCanvasDraw() {
@@ -238,7 +238,7 @@ function LiveVerification() {
     startedRef.current = false;
     analyzerReadyRef.current = false;
 
-    // progress ring reset
+    // reset progress
     isRecordingRef.current = false;
     cancelRecProgressLoop();
     setRecProgress(0);
@@ -465,7 +465,7 @@ function LiveVerification() {
     recordingStartRef.current = performance.now();
     setStatus("Recording…");
 
-    // progress ring
+    // progress loop
     isRecordingRef.current = true;
     setRecProgress(0);
     startRecProgressLoop();
@@ -558,9 +558,7 @@ function LiveVerification() {
   const dispEllipse = currentDisplayEllipse(); // for drawing only
   const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
 
-  // Consistent stroke widths for exact overlay
-  const GUIDE_STROKE = 3;
-  const PROGRESS_STROKE = 3; // keep equal to guide for perfect overlap
+  const GUIDE_STROKE = 3; // keep consistent for perfect overlap
 
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
@@ -584,11 +582,10 @@ function LiveVerification() {
           shapeRendering="geometricPrecision"
         >
           <defs>
+            {/* Hole for the overlay */}
             <mask id="cutout-mask-live">
               <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
-              {/* The hole follows the exact same geometry as the guide */}
               <ellipse
-                id="face-cutout"
                 cx={dispEllipse.disp.cx}
                 cy={dispEllipse.disp.cy}
                 rx={dispEllipse.disp.rx}
@@ -597,7 +594,7 @@ function LiveVerification() {
               />
             </mask>
 
-            {/* Single geometry source used by both strokes */}
+            {/* Single geometry source used by all strokes */}
             <ellipse
               id="face-geom"
               cx={dispEllipse.disp.cx}
@@ -610,7 +607,7 @@ function LiveVerification() {
           {/* Dark overlay with cutout */}
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
 
-          {/* Guide ellipse (dotted white), drawn from the shared geometry */}
+          {/* Base dashed guide (white) */}
           <use
             href="#face-geom"
             fill="none"
@@ -620,32 +617,42 @@ function LiveVerification() {
             strokeDasharray="6 6"
           />
 
-          {/* Recording progress ring (drawn on the exact same path) */}
+          {/* Color-wipe: reveal GREEN dashes over the same path using an arc-length mask */}
           {isRecordingRef.current && (() => {
-            const rx = dispEllipse.disp.rx;
-            const ry = dispEllipse.disp.ry;
+            const { cx, cy, rx, ry } = dispEllipse.disp;
             const L = ellipsePerimeter(rx, ry);
             const dash = L;
             const offset = (1 - recProgress) * L;
 
-            // Start at 12 o'clock
-            const cx = dispEllipse.disp.cx;
-            const cy = dispEllipse.disp.cy;
-
             return (
-              <g transform={`rotate(-90 ${cx} ${cy})`}>
+              <>
+                {/* Arc-length mask that grows clockwise from 12 o'clock */}
+                <mask id="progress-mask" maskUnits="userSpaceOnUse">
+                  <rect x="0" y="0" width={vp.w} height={vp.h} fill="black" />
+                  <g transform={`rotate(-90 ${cx} ${cy})`}>
+                    <use
+                      href="#face-geom"
+                      fill="none"
+                      stroke="white"
+                      strokeWidth={GUIDE_STROKE}
+                      vectorEffect="non-scaling-stroke"
+                      strokeDasharray={dash}
+                      strokeDashoffset={offset}
+                    />
+                  </g>
+                </mask>
+
+                {/* Same dashed path, painted green, clipped by the mask */}
                 <use
                   href="#face-geom"
                   fill="none"
                   stroke="limegreen"
-                  strokeWidth={PROGRESS_STROKE}
+                  strokeWidth={GUIDE_STROKE}
                   vectorEffect="non-scaling-stroke"
-                  strokeLinecap="round"
-                  strokeDasharray={dash}
-                  strokeDashoffset={offset}
-                  opacity="0.95"
+                  strokeDasharray="6 6"
+                  mask="url(#progress-mask)"
                 />
-              </g>
+              </>
             );
           })()}
         </svg>
