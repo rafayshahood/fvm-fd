@@ -1,4 +1,4 @@
-// LiveIDVerification.jsx (no grace, no streaks, no cooldowns) — sends ~5 fps
+// LiveIDVerification.jsx — updated to ONLY use new-script conditions
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -114,7 +114,6 @@ export default function LiveIDVerification() {
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
 
-      // try best AF/AE on capable devices
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -144,15 +143,15 @@ export default function LiveIDVerification() {
     }
   }
 
-  // --- SEND LOOP: ~5 fps + “every 5th frame” fallback, with backpressure
+  // send loop (unchanged)
   function startSendingFrames() {
     let stop = false;
     let sending = false;
     let lastSentAt = 0;
     let frameCounter = 0;
     const TARGET_FPS = 30;
-    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS); // ~200ms
-    const MAX_BUFFERED = 256 * 1024; // 256KB
+    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS);
+    const MAX_BUFFERED = 256 * 1024;
 
     const loop = () => {
       if (stop) return;
@@ -161,8 +160,6 @@ export default function LiveIDVerification() {
 
       const now = performance.now();
       frameCounter += 1;
-
-      // time throttle (primary) + every-5th-frame (fallback)
       const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
       const ratioOk = (frameCounter % 5 === 0);
       if (!timeOk && !ratioOk) { requestAnimationFrame(loop); return; }
@@ -173,7 +170,6 @@ export default function LiveIDVerification() {
 
       sending = true;
       try {
-        // downscale for bandwidth (keeps aspect)
         const maxW = 960;
         const scale = Math.min(1, maxW / v.videoWidth);
         const W = Math.round(v.videoWidth * scale);
@@ -188,7 +184,7 @@ export default function LiveIDVerification() {
         if (b64) { try { ws.send(b64); lastSentAt = now; } catch {} }
       } finally {
         sending = false;
-        setTimeout(() => requestAnimationFrame(loop), 16); // allow UI to breathe
+        setTimeout(() => requestAnimationFrame(loop), 16);
       }
     };
 
@@ -213,14 +209,7 @@ export default function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // keep proximity rule in FE to avoid bad uploads (MIN_ID_W_RATIO=0.55)
-      const MIN_RATIO = 0.55;
-      const vw = v.videoWidth || 0;
-      if (w < Math.round(vw * MIN_RATIO)) {
-        alert("Move closer so the ID fills the rectangle.");
-        setIsUploading(false);
-        return;
-      }
+      // No old “fill/brightness/glare” gates — only capture when new checks are green (see canCapture below)
 
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
@@ -244,7 +233,7 @@ export default function LiveIDVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // clean up and leave
+      // cleanup
       if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
@@ -268,48 +257,28 @@ export default function LiveIDVerification() {
     };
   }, []);
 
-  // --- Simple guidance directly from backend (no waiting) ---
+  // --- Guidance (only new checks) ---
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result)   return "Connecting…";
 
-    // 1) frame brightness gate comes first
-    const b = result.brightness_status;
-    if (b !== "ok") {
-      if (b === "too_dark")   return "💡 Image too dark — adjust lighting.";
-      if (b === "too_bright") return "☀️ Image too bright — reduce brightness.";
-      return "💡 Adjust overall lighting.";
-    }
-
-    // 2..n) directly mirror backend conditions
     if (!result.id_card_detected)  return "📇 Place the ID card in view.";
-    if (!result.id_inside_rect)    return "📐 Align the ID fully inside the rectangle.";
-    if (!result.face_detected)     return "❌ No face detected on the ID.";
-    if (!result.id_fill_ok)        return "↔️ Move closer so the ID fills the rectangle.";
-    if (!result.face_size_ok)      return "🔍 ID face either too small or Unclear.";
+    if (!result.id_overlap_ok)     return "📐 Move the ID fully into the rectangle.";
+    if (!result.id_size_ok)        return "↔️ Move closer so the ID fills the rectangle.";
+    if (!result.face_on_id)        return "👤 Make sure the ID portrait is visible.";
+    if (!result.ocr_ok)            return "🔎 Hold steady—text unclear (try tilting to reduce reflections).";
 
-    const fb = result.face_brightness_status;
-    if (fb && fb !== "ok") {
-      if (fb === "too_dark")   return "💡 Face too dark — add light.";
-      if (fb === "too_bright") return "☀️ Face too bright — reduce glare/brightness.";
-      return "💡 Adjust light on the face.";
-    }
-
-    if (result.glare_detected) return "✨ Reduce glare on the ID (tilt slightly).";
     return "✅ You can capture now.";
   })();
 
-  // Button gating: only allow capture when backend conditions are all green
+  // Enable capture only when ALL new checks are satisfied
   const canCapture =
     !!result &&
-    result.brightness_status === "ok" &&
     result.id_card_detected === true &&
-    result.id_inside_rect === true &&
-    result.face_detected === true &&
-    result.id_fill_ok === true &&
-    result.face_size_ok === true &&
-    (result.face_brightness_status === null || result.face_brightness_status === "ok") &&
-    !result.glare_detected;
+    result.id_overlap_ok === true &&
+    result.id_size_ok === true &&
+    result.face_on_id === true &&
+    result.ocr_ok === true;
 
   const rawBox    = mapBoxToScreen(result?.largest_bbox);
   const idCardBox = mapBoxToScreen(result?.id_card_bbox);
