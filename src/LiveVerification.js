@@ -144,8 +144,7 @@ function LiveVerification() {
     };
   }
 
-  // ---------- Recording Progress Ring (NEW) ----------
-  // Progress ring state (0..1) and a RAF handle for smooth updates
+  // ---------- Recording Progress Ring ----------
   const [recProgress, setRecProgress] = useState(0);
   const isRecordingRef = useRef(false);
   const recProgRAFRef = useRef(null);
@@ -156,7 +155,6 @@ function LiveVerification() {
     return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
   }
 
-  // Smoothly update progress while recording
   function startRecProgressLoop() {
     cancelRecProgressLoop();
     const loop = () => {
@@ -172,7 +170,7 @@ function LiveVerification() {
     if (recProgRAFRef.current) cancelAnimationFrame(recProgRAFRef.current);
     recProgRAFRef.current = null;
   }
-  // -----------------------------------------------
+  // ---------------------------------------------
 
   // Offscreen canvas drawing for recording upright pixels
   function startRecCanvasDraw() {
@@ -248,7 +246,7 @@ function LiveVerification() {
 
   function handleTimeout() {
     cleanup();
-    setIsProcessing(false); // ensure overlay is gone on timeout
+    setIsProcessing(false);
     navigate("/", { replace: true });
     setTimeout(() => {
       if (window.location.pathname !== "/") window.location.assign("/");
@@ -256,7 +254,6 @@ function LiveVerification() {
   }
 
   function startCountdownAndTimeout() {
-    // Start the 30s window only when analyzer is ready (first payload)
     sessionEndAtRef.current = performance.now() + TIMEOUT_TOTAL_MS;
     setRemainingMs(TIMEOUT_TOTAL_MS);
     countdownIdRef.current = setInterval(() => {
@@ -267,7 +264,7 @@ function LiveVerification() {
   }
 
   async function startCamera() {
-    if (startedRef.current || isProcessing) return; // block while processing
+    if (startedRef.current || isProcessing) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
 
@@ -296,7 +293,6 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
-        // Send ellipse immediately
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -311,7 +307,6 @@ function LiveVerification() {
           const data = JSON.parse(evt.data);
           setResult(data);
 
-          // FIRST analyzer payload → start the 30s session now
           if (!analyzerReadyRef.current) {
             analyzerReadyRef.current = true;
             startCountdownAndTimeout();
@@ -362,7 +357,6 @@ function LiveVerification() {
       };
       wsRef.current = ws;
 
-      // Resend ellipse on resize (keeps backend in sync)
       const resendOnResize = () => {
         const e = currentDisplayEllipse();
         const ws2 = wsRef.current;
@@ -374,15 +368,12 @@ function LiveVerification() {
       window.addEventListener("resize", resendOnResize);
       window.addEventListener("orientationchange", resendOnResize);
 
-      // Start streaming frames (5 fps)
       startSendingFrames();
 
-      // Clean window listeners on unmount
       const clean = () => {
         window.removeEventListener("resize", resendOnResize);
         window.removeEventListener("orientationchange", resendOnResize);
       };
-      // ensure removal on unmount
       setTimeout(() => {
         if (!startedRef.current) clean();
       }, 0);
@@ -409,7 +400,6 @@ function LiveVerification() {
       const ctx = canvas.getContext("2d");
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
-      // Occasionally refresh ellipse in VIDEO coordinates
       if (Math.random() < 0.02) {
         const e = currentDisplayEllipse();
         if (e) {
@@ -466,7 +456,6 @@ function LiveVerification() {
 
       setIsProcessing(true);
       await uploadSingle(blob);
-      // overlay remains until navigation
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -488,7 +477,6 @@ function LiveVerification() {
     recRef.current = null;
     stableStartRef.current = null;
 
-    // progress ring ends at full
     isRecordingRef.current = false;
     cancelRecProgressLoop();
     setRecProgress(1);
@@ -502,7 +490,6 @@ function LiveVerification() {
     stopRecCanvasDraw();
     stableStartRef.current = null;
 
-    // progress ring reset
     isRecordingRef.current = false;
     cancelRecProgressLoop();
     setRecProgress(0);
@@ -516,7 +503,6 @@ function LiveVerification() {
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
-      // 1) Upload & wait for conversion to finish (endpoint blocks until mp4 is saved)
       const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
         body: form,
@@ -524,20 +510,16 @@ function LiveVerification() {
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
-      // 2) Stay on this page with the blocking overlay UNTIL backend state flips
-      //    to video_verified === true, so Home shows “Video Verified” immediately.
-      const deadline = Date.now() + 20000; // wait up to 20s (usually far less)
-      // eslint-disable-next-line no-constant-condition
+      const deadline = Date.now() + 20000;
       while (true) {
         const stRes = await fetch(`${API_BASE}/req/state/${reqId}`, { cache: "no-store" });
         const st = await stRes.json();
         const ready = !!st?.state?.video_verified;
         if (ready) break;
-        if (Date.now() > deadline) break; // fail-safe: don’t trap the user forever
+        if (Date.now() > deadline) break;
         await new Promise((r) => setTimeout(r, 500));
       }
 
-      // 3) Now teardown and go Home
       cleanup();
       navigate("/", { replace: true });
       setTimeout(() => {
@@ -546,7 +528,7 @@ function LiveVerification() {
     } catch (e) {
       console.error("Upload error:", e);
       setStatus("Upload error");
-      setIsProcessing(false); // allow retry
+      setIsProcessing(false);
       hasUploadedRef.current = false;
       uploadingRef.current = false;
     }
@@ -576,6 +558,10 @@ function LiveVerification() {
   const dispEllipse = currentDisplayEllipse(); // for drawing only
   const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
 
+  // Consistent stroke widths for exact overlay
+  const GUIDE_STROKE = 3;
+  const PROGRESS_STROKE = 3; // keep equal to guide for perfect overlap
+
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
       <video
@@ -595,11 +581,14 @@ function LiveVerification() {
           height={vp.h}
           viewBox={`0 0 ${vp.w} ${vp.h}`}
           style={{ position:"absolute", inset:0, pointerEvents:"none" }}
+          shapeRendering="geometricPrecision"
         >
           <defs>
             <mask id="cutout-mask-live">
               <rect x="0" y="0" width={vp.w} height={vp.h} fill="white"/>
+              {/* The hole follows the exact same geometry as the guide */}
               <ellipse
+                id="face-cutout"
                 cx={dispEllipse.disp.cx}
                 cy={dispEllipse.disp.cy}
                 rx={dispEllipse.disp.rx}
@@ -607,43 +596,50 @@ function LiveVerification() {
                 fill="black"
               />
             </mask>
+
+            {/* Single geometry source used by both strokes */}
+            <ellipse
+              id="face-geom"
+              cx={dispEllipse.disp.cx}
+              cy={dispEllipse.disp.cy}
+              rx={dispEllipse.disp.rx}
+              ry={dispEllipse.disp.ry}
+            />
           </defs>
 
           {/* Dark overlay with cutout */}
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
 
-          {/* Guide ellipse (existing, dashed) */}
-          <ellipse
-            cx={dispEllipse.disp.cx}
-            cy={dispEllipse.disp.cy}
-            rx={dispEllipse.disp.rx}
-            ry={dispEllipse.disp.ry}
+          {/* Guide ellipse (dotted white), drawn from the shared geometry */}
+          <use
+            href="#face-geom"
             fill="none"
             stroke="white"
-            strokeWidth="3"
+            strokeWidth={GUIDE_STROKE}
+            vectorEffect="non-scaling-stroke"
             strokeDasharray="6 6"
           />
 
-          {/* Recording progress ring (NEW) */}
+          {/* Recording progress ring (drawn on the exact same path) */}
           {isRecordingRef.current && (() => {
-            const cx = dispEllipse.disp.cx;
-            const cy = dispEllipse.disp.cy;
             const rx = dispEllipse.disp.rx;
             const ry = dispEllipse.disp.ry;
-            const L = ellipsePerimeter(rx, ry); // approximate length
+            const L = ellipsePerimeter(rx, ry);
             const dash = L;
             const offset = (1 - recProgress) * L;
 
+            // Start at 12 o'clock
+            const cx = dispEllipse.disp.cx;
+            const cy = dispEllipse.disp.cy;
+
             return (
               <g transform={`rotate(-90 ${cx} ${cy})`}>
-                <ellipse
-                  cx={cx}
-                  cy={cy}
-                  rx={rx}
-                  ry={ry}
+                <use
+                  href="#face-geom"
                   fill="none"
                   stroke="limegreen"
-                  strokeWidth="6"
+                  strokeWidth={PROGRESS_STROKE}
+                  vectorEffect="non-scaling-stroke"
                   strokeLinecap="round"
                   strokeDasharray={dash}
                   strokeDashoffset={offset}
