@@ -684,7 +684,6 @@ function LiveVerification() {
         }}
       />
 
-      {/* ANIMATION OPTION 3: Ellipse Border Animation (integrated with existing ellipse) */}
       {dispEllipse && (
         <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
           <defs>
@@ -700,46 +699,15 @@ function LiveVerification() {
             </mask>
           </defs>
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
-          
-          {/* Animated recording border (Option 3) */}
-          {recRef.current && (
-            <>
-              <ellipse
-                cx={dispEllipse.disp.cx}
-                cy={dispEllipse.disp.cy}
-                rx={dispEllipse.disp.rx}
-                ry={dispEllipse.disp.ry}
-                fill="none"
-                stroke="#ff4444"
-                strokeWidth="4"
-                strokeDasharray="10 5"
-                style={{
-                  animation: 'rotate 2s linear infinite',
-                  transformOrigin: `${dispEllipse.disp.cx}px ${dispEllipse.disp.cy}px`
-                }}
-              />
-              <style>{`
-                @keyframes rotate {
-                  from { transform: rotate(0deg); }
-                  to { transform: rotate(360deg); }
-                }
-              `}</style>
-            </>
-          )}
-          
-          {/* Original white/red dashed border */}
           <ellipse
             cx={dispEllipse.disp.cx}
             cy={dispEllipse.disp.cy}
             rx={dispEllipse.disp.rx}
             ry={dispEllipse.disp.ry}
             fill="none"
-            stroke={recRef.current ? "#ff4444" : "white"}
+            stroke="white"
             strokeWidth="3"
             strokeDasharray="6 6"
-            style={{
-              transition: 'stroke 0.3s ease'
-            }}
           />
         </svg>
       )}
