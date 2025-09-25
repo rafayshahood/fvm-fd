@@ -1,5 +1,5 @@
-// LiveIDVerification.jsx — EXACT new-script overlays (ROI-only), metrics line, and colors.
-// Uses backend frame size to render boxes pixel-perfect on any device/orientation.
+// LiveIDVerification.jsx — ROI-only overlays, metrics, mobile-safe mapping,
+// guide prompt above the box, dashed-white guide, and AUTO-CAPTURE.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -31,6 +31,7 @@ export default function LiveIDVerification() {
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const startedRef = useRef(false);
+  const autoCapturedRef = useRef(false); // guard to prevent double auto-capture
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
@@ -52,7 +53,6 @@ export default function LiveIDVerification() {
     };
   }, []);
 
-  // Compute how the video is letterboxed into the viewport (object-fit: contain)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale:1, dx:0, dy:0, dispW:0, dispH:0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -60,7 +60,7 @@ export default function LiveIDVerification() {
     return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
   }
 
-  // Current displayed video rectangle on screen
+  // current displayed video rectangle on screen
   function currentDisplayRect() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
@@ -147,7 +147,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // send loop (downscale to ≤960 width; backend echoes frame_w/frame_h for proper overlay mapping)
+  // send loop (≤960 width JPEG), backend computes & returns frame_w/frame_h
   function startSendingFrames() {
     let stop = false;
     let sending = false;
@@ -196,6 +196,22 @@ export default function LiveIDVerification() {
     return () => { stop = true; };
   }
 
+  // AUTO-CAPTURE: when all gates pass, capture once
+  useEffect(() => {
+    const allGreen =
+      !!result &&
+      result.id_card_detected === true &&
+      result.id_overlap_ok === true &&
+      result.id_size_ok === true &&
+      result.face_on_id === true &&
+      result.ocr_ok === true;
+
+    if (cameraOn && allGreen && !isUploading && !autoCapturedRef.current) {
+      autoCapturedRef.current = true; // guard
+      handleCapture();
+    }
+  }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
@@ -207,8 +223,8 @@ export default function LiveIDVerification() {
       const fw = result?.frame_w, fh = result?.frame_h;
       if (!fw || !fh) throw new Error("No backend frame size.");
 
-      // Use BACKEND’s guide rect for capture (exactly like the new script)
-      const guideOnScreen = mapRectToScreenRect(result?.rect, fw, fh);
+      // Use BACKEND’s guide rect for capture
+      const guideOnScreen = guideRect; // already computed below
       if (!guideOnScreen) throw new Error("Guide not ready");
       const { x, y, w, h } = mapScreenRectToVideoRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h);
       if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
@@ -244,6 +260,7 @@ export default function LiveIDVerification() {
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
+      autoCapturedRef.current = false; // allow retry on next allGreen
     } finally {
       setIsUploading(false);
     }
@@ -270,6 +287,7 @@ export default function LiveIDVerification() {
       if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
       if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
       startedRef.current = false;
+      autoCapturedRef.current = false;
     };
   }, []);
 
@@ -282,17 +300,8 @@ export default function LiveIDVerification() {
     if (!result.id_size_ok)        return "↔️ Move closer so the ID fills the box.";
     if (!result.face_on_id)        return "👤 Make sure the ID portrait is visible.";
     if (!result.ocr_ok)            return "🔎 Hold steady—text unclear.";
-    return "✅ You can capture now.";
+    return "✅ Perfect. Capturing…";
   })();
-
-  // Enable capture only when ALL new checks are satisfied
-  const canCapture =
-    !!result &&
-    result.id_card_detected === true &&
-    result.id_overlap_ok === true &&
-    result.id_size_ok === true &&
-    result.face_on_id === true &&
-    result.ocr_ok === true;
 
   // Screen-space overlay geometry
   const fw = result?.frame_w, fh = result?.frame_h;
@@ -300,12 +309,7 @@ export default function LiveIDVerification() {
   const idCardBox = result?.id_card_bbox ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
   const faceBox   = result?.largest_bbox ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
-  // Colors to match cv2 version
-  const COLOR_GUIDE = "rgb(80,180,255)";    // (80,180,255)
-  const COLOR_ID    = result?.verified ? "rgb(0,220,0)" : "rgb(0,180,255)";
-  const COLOR_FACE  = "rgb(255,140,0)";
-
-  // OCR metrics line (same fields as cv2.putText)
+  // OCR metrics
   const fmt = (v, d=2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
   const metricsText = (result && idCardBox) ? [
     `conf ${fmt(result.id_card_conf)}`,
@@ -324,40 +328,34 @@ export default function LiveIDVerification() {
 
       {(cameraOn && guideRect) && (
         <>
-          {/* SVG overlays (exact colors) */}
+          {/* SVG overlays */}
           <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
                style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-            {/* dim outside the guide */}
             <defs>
               <mask id="rect-cutout">
                 <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
                 <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
-                      rx="0" ry="0" fill="black" />
+                      rx="12" ry="12" fill="black" />
               </mask>
             </defs>
+            {/* dim outside */}
             <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-            {/* guide rectangle (solid, new-script color) */}
+            {/* guide rectangle — dashed white like before */}
             <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
-                  fill="none" stroke={COLOR_GUIDE} strokeWidth="2.5" />
-            {/* label above guide, like cv2.putText */}
-            <text x={guideRect.x} y={Math.max(16, guideRect.y - 8)} fill={COLOR_GUIDE}
-                  fontSize="14" fontFamily="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial">
-              Place ID inside box
-            </text>
-
+                  rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
             {/* ID bbox */}
             {idCardBox && (
               <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                    fill="none" stroke={COLOR_ID} strokeWidth="2.5" />
+                    fill="none" stroke={result?.verified ? "#00dc00" : "#00b4ff"} strokeWidth="3" />
             )}
             {/* face-on-ID bbox */}
             {faceBox && (
               <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h}
-                    fill="none" stroke={COLOR_FACE} strokeWidth="2.5" />
+                    fill="none" stroke="#ff8c00" strokeWidth="3" />
             )}
           </svg>
 
-          {/* OCR metrics line (mirrors the cv2 text) */}
+          {/* OCR metrics line (near ID bbox like cv2) */}
           {metricsText && idCardBox && (
             <div
               style={{
@@ -399,35 +397,22 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Top guidance banner (prompts) */}
-      <div className="position-absolute w-100 d-flex justify-content-center"
-           style={{ top: 16, left: 0, padding: "0 16px" }}>
-        <div style={{
-          maxWidth:680, width:"100%", textAlign:"center",
-          background:"rgba(0,0,0,0.6)", color:"#fff",
-          borderRadius:12, padding:"10px 14px", fontSize:16, backdropFilter:"blur(4px)"
-        }}>
-          {guidance}
+      {/* Guidance banner — placed just ABOVE the guide rect */}
+      {guideRect && (
+        <div className="position-absolute w-100 d-flex justify-content-center"
+             style={{ top: Math.max(16, guideRect.y - 60), left: 0, padding: "0 16px" }}>
+          <div style={{
+            maxWidth:680, width:"100%", textAlign:"center",
+            background:"rgba(0,0,0,0.6)", color:"#fff",
+            borderRadius:12, padding:"10px 14px", fontSize:16, backdropFilter:"blur(4px)"
+          }}>
+            {guidance}
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Controls */}
+      {/* Bottom status */}
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom:24, left:0, gap:8 }}>
-        <div className="d-flex gap-2">
-          {!cameraOn && (
-            <button className="btn btn-primary" onClick={() => { startCamera(); setCameraOn(true); }}>
-              Start Camera
-            </button>
-          )}
-          {cameraOn && (
-            <button className="btn btn-success"
-                    onClick={handleCapture}
-                    disabled={!canCapture || isUploading}
-                    title={canCapture ? "Capture ID still" : "Meet on-screen conditions to enable capture"}>
-              {isUploading ? "Capturing…" : "Capture"}
-            </button>
-          )}
-        </div>
         <div className="text-light text-center"
              style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
           {status}
