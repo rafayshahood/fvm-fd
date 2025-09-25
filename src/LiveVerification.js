@@ -75,14 +75,14 @@ function LiveVerification() {
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
-  const analyzerReadyRef = useRef(false);
+  const analyzerReadyRef = useRef(false); // flips on first analyzer payload
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
   const STABLE_REQUIRED_MS = 1000;
   const RECORD_TARGET_MS = 8000;
   const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5;
+  const SEND_EVERY_NTH_FRAME = 5; // 5fps regardless of camera FPS
   const TIMEOUT_TOTAL_MS = 30000;
 
   const [status, setStatus] = useState("Idle");
@@ -144,7 +144,7 @@ function LiveVerification() {
     };
   }
 
-  // ---------- Recording Progress (color-wipe) ----------
+  // ---------- Recording Progress (color flip) ----------
   const [recProgress, setRecProgress] = useState(0);
   const isRecordingRef = useRef(false);
   const recProgRAFRef = useRef(null);
@@ -172,7 +172,7 @@ function LiveVerification() {
   }
   // -----------------------------------------------------
 
-  // Offscreen canvas drawing for recording upright pixels
+  // Offscreen canvas drawing for upright pixels
   function startRecCanvasDraw() {
     const v = videoRef.current;
     if (!v) return;
@@ -264,7 +264,7 @@ function LiveVerification() {
   }
 
   async function startCamera() {
-    if (startedRef.current || isProcessing) return;
+    if (startedRef.current || isProcessing) return; // block while processing
     startedRef.current = true;
     setStatus("Requesting camera…");
 
@@ -293,6 +293,7 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
+        // Send ellipse immediately
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -307,6 +308,7 @@ function LiveVerification() {
           const data = JSON.parse(evt.data);
           setResult(data);
 
+          // FIRST analyzer payload → start the 30s session now
           if (!analyzerReadyRef.current) {
             analyzerReadyRef.current = true;
             startCountdownAndTimeout();
@@ -357,6 +359,7 @@ function LiveVerification() {
       };
       wsRef.current = ws;
 
+      // Resend ellipse on resize (keeps backend in sync)
       const resendOnResize = () => {
         const e = currentDisplayEllipse();
         const ws2 = wsRef.current;
@@ -368,12 +371,15 @@ function LiveVerification() {
       window.addEventListener("resize", resendOnResize);
       window.addEventListener("orientationchange", resendOnResize);
 
+      // Start streaming frames (5 fps)
       startSendingFrames();
 
+      // Clean window listeners on unmount
       const clean = () => {
         window.removeEventListener("resize", resendOnResize);
         window.removeEventListener("orientationchange", resendOnResize);
       };
+      // ensure removal on unmount
       setTimeout(() => {
         if (!startedRef.current) clean();
       }, 0);
@@ -400,6 +406,7 @@ function LiveVerification() {
       const ctx = canvas.getContext("2d");
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
+      // Occasionally refresh ellipse in VIDEO coordinates
       if (Math.random() < 0.02) {
         const e = currentDisplayEllipse();
         if (e) {
@@ -456,6 +463,7 @@ function LiveVerification() {
 
       setIsProcessing(true);
       await uploadSingle(blob);
+      // overlay remains until navigation
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -503,6 +511,7 @@ function LiveVerification() {
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
+      // 1) Upload & wait for conversion to finish (endpoint blocks until mp4 is saved)
       const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
         body: form,
@@ -510,7 +519,9 @@ function LiveVerification() {
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
-      const deadline = Date.now() + 20000;
+      // 2) Stay on this page with the blocking overlay UNTIL backend state flips
+      const deadline = Date.now() + 20000; // wait up to 20s
+      // eslint-disable-next-line no-constant-condition
       while (true) {
         const stRes = await fetch(`${API_BASE}/req/state/${reqId}`, { cache: "no-store" });
         const st = await stRes.json();
@@ -520,6 +531,7 @@ function LiveVerification() {
         await new Promise((r) => setTimeout(r, 500));
       }
 
+      // 3) Now teardown and go Home
       cleanup();
       navigate("/", { replace: true });
       setTimeout(() => {
@@ -528,7 +540,7 @@ function LiveVerification() {
     } catch (e) {
       console.error("Upload error:", e);
       setStatus("Upload error");
-      setIsProcessing(false);
+      setIsProcessing(false); // allow retry
       hasUploadedRef.current = false;
       uploadingRef.current = false;
     }
@@ -558,7 +570,9 @@ function LiveVerification() {
   const dispEllipse = currentDisplayEllipse(); // for drawing only
   const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
 
-  const GUIDE_STROKE = 3; // keep consistent for perfect overlap
+  // Stroke settings (keep identical for perfect overlap)
+  const GUIDE_STROKE = 3;
+  const DASH_PATTERN = "6 6";
 
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
@@ -594,7 +608,7 @@ function LiveVerification() {
               />
             </mask>
 
-            {/* Single geometry source used by all strokes */}
+            {/* Single geometry source used by both strokes */}
             <ellipse
               id="face-geom"
               cx={dispEllipse.disp.cx}
@@ -607,28 +621,31 @@ function LiveVerification() {
           {/* Dark overlay with cutout */}
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
 
-          {/* Base dashed guide (white) */}
+          {/* --- Color flip implementation --- */}
+          {/* 1) Base green dashed ring (full). This is what "completed" looks like. */}
           <use
             href="#face-geom"
             fill="none"
-            stroke="white"
+            stroke="limegreen"
             strokeWidth={GUIDE_STROKE}
             vectorEffect="non-scaling-stroke"
-            strokeDasharray="6 6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeDasharray={DASH_PATTERN}
           />
 
-          {/* Color-wipe: reveal GREEN dashes over the same path using an arc-length mask */}
-          {isRecordingRef.current && (() => {
+          {/* 2) White dashed ring on top, masked so only the remaining arc stays white.
+                 As progress grows, the white area shrinks clockwise, revealing green beneath. */}
+          {(() => {
             const { cx, cy, rx, ry } = dispEllipse.disp;
             const L = ellipsePerimeter(rx, ry);
-            const dash = L;
-            const offset = (1 - recProgress) * L;
-
+            const remaining = Math.max(0, 1 - recProgress);
+            const dashForMask = `${remaining * L} ${recProgress * L}`; // show only the remaining arc
             return (
               <>
-                {/* Arc-length mask that grows clockwise from 12 o'clock */}
-                <mask id="progress-mask" maskUnits="userSpaceOnUse">
+                <mask id="remaining-mask" maskUnits="userSpaceOnUse">
                   <rect x="0" y="0" width={vp.w} height={vp.h} fill="black" />
+                  {/* Start at 12 o'clock and sweep clockwise */}
                   <g transform={`rotate(-90 ${cx} ${cy})`}>
                     <use
                       href="#face-geom"
@@ -636,25 +653,28 @@ function LiveVerification() {
                       stroke="white"
                       strokeWidth={GUIDE_STROKE}
                       vectorEffect="non-scaling-stroke"
-                      strokeDasharray={dash}
-                      strokeDashoffset={offset}
+                      strokeLinecap="butt"
+                      strokeDasharray={dashForMask}
+                      strokeDashoffset={0}
                     />
                   </g>
                 </mask>
 
-                {/* Same dashed path, painted green, clipped by the mask */}
                 <use
                   href="#face-geom"
                   fill="none"
-                  stroke="limegreen"
+                  stroke="white"
                   strokeWidth={GUIDE_STROKE}
                   vectorEffect="non-scaling-stroke"
-                  strokeDasharray="6 6"
-                  mask="url(#progress-mask)"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeDasharray={DASH_PATTERN}
+                  mask="url(#remaining-mask)"
                 />
               </>
             );
           })()}
+          {/* --- end color flip --- */}
         </svg>
       )}
 
