@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://wagner-smaller-pacific-even.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://celebrity-held-yarn-blowing.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
