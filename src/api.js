@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://lkcc3p32cybgb3-8888.proxy.runpod.net';
+const RUNPOD_DEFAULT = 'https://smart-poetry-readily-pdt.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
