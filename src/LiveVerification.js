@@ -75,14 +75,14 @@ function LiveVerification() {
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
-  const analyzerReadyRef = useRef(false); // flips on first analyzer payload
+  const analyzerReadyRef = useRef(false);
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
   const STABLE_REQUIRED_MS = 1000;
   const RECORD_TARGET_MS = 8000;
   const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5; // 5fps regardless of camera FPS
+  const SEND_EVERY_NTH_FRAME = 5;
   const TIMEOUT_TOTAL_MS = 30000;
 
   const [status, setStatus] = useState("Idle");
@@ -144,12 +144,12 @@ function LiveVerification() {
     };
   }
 
-  // ---------- Recording Progress (color flip) ----------
+  // ---------- Recording Progress (color flip, no green before start) ----------
   const [recProgress, setRecProgress] = useState(0);
   const isRecordingRef = useRef(false);
   const recProgRAFRef = useRef(null);
 
-  // Ramanujan circumference approximation for an ellipse
+  // Ramanujan circumference approximation for an ellipse (for arc-length masks)
   function ellipsePerimeter(rx, ry) {
     const a = Math.max(0, rx), b = Math.max(0, ry);
     return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
@@ -170,9 +170,9 @@ function LiveVerification() {
     if (recProgRAFRef.current) cancelAnimationFrame(recProgRAFRef.current);
     recProgRAFRef.current = null;
   }
-  // -----------------------------------------------------
+  // ---------------------------------------------------------------------------
 
-  // Offscreen canvas drawing for upright pixels
+  // Offscreen canvas drawing for upright recording
   function startRecCanvasDraw() {
     const v = videoRef.current;
     if (!v) return;
@@ -238,7 +238,7 @@ function LiveVerification() {
     startedRef.current = false;
     analyzerReadyRef.current = false;
 
-    // reset progress
+    // reset progress (ensures all-white ring again)
     isRecordingRef.current = false;
     cancelRecProgressLoop();
     setRecProgress(0);
@@ -264,7 +264,7 @@ function LiveVerification() {
   }
 
   async function startCamera() {
-    if (startedRef.current || isProcessing) return; // block while processing
+    if (startedRef.current || isProcessing) return;
     startedRef.current = true;
     setStatus("Requesting camera…");
 
@@ -293,7 +293,6 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
-        // Send ellipse immediately
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -308,7 +307,6 @@ function LiveVerification() {
           const data = JSON.parse(evt.data);
           setResult(data);
 
-          // FIRST analyzer payload → start the 30s session now
           if (!analyzerReadyRef.current) {
             analyzerReadyRef.current = true;
             startCountdownAndTimeout();
@@ -359,7 +357,6 @@ function LiveVerification() {
       };
       wsRef.current = ws;
 
-      // Resend ellipse on resize (keeps backend in sync)
       const resendOnResize = () => {
         const e = currentDisplayEllipse();
         const ws2 = wsRef.current;
@@ -371,15 +368,12 @@ function LiveVerification() {
       window.addEventListener("resize", resendOnResize);
       window.addEventListener("orientationchange", resendOnResize);
 
-      // Start streaming frames (5 fps)
       startSendingFrames();
 
-      // Clean window listeners on unmount
       const clean = () => {
         window.removeEventListener("resize", resendOnResize);
         window.removeEventListener("orientationchange", resendOnResize);
       };
-      // ensure removal on unmount
       setTimeout(() => {
         if (!startedRef.current) clean();
       }, 0);
@@ -406,7 +400,6 @@ function LiveVerification() {
       const ctx = canvas.getContext("2d");
       ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
-      // Occasionally refresh ellipse in VIDEO coordinates
       if (Math.random() < 0.02) {
         const e = currentDisplayEllipse();
         if (e) {
@@ -463,7 +456,6 @@ function LiveVerification() {
 
       setIsProcessing(true);
       await uploadSingle(blob);
-      // overlay remains until navigation
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -473,7 +465,7 @@ function LiveVerification() {
     recordingStartRef.current = performance.now();
     setStatus("Recording…");
 
-    // progress loop
+    // progress loop — enables color flip
     isRecordingRef.current = true;
     setRecProgress(0);
     startRecProgressLoop();
@@ -511,7 +503,6 @@ function LiveVerification() {
       const form = new FormData();
       form.append("video", blob, "live_capture.webm");
 
-      // 1) Upload & wait for conversion to finish (endpoint blocks until mp4 is saved)
       const res = await fetch(`${API_BASE}/upload-live-clip?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
         body: form,
@@ -519,9 +510,7 @@ function LiveVerification() {
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
-      // 2) Stay on this page with the blocking overlay UNTIL backend state flips
-      const deadline = Date.now() + 20000; // wait up to 20s
-      // eslint-disable-next-line no-constant-condition
+      const deadline = Date.now() + 20000;
       while (true) {
         const stRes = await fetch(`${API_BASE}/req/state/${reqId}`, { cache: "no-store" });
         const st = await stRes.json();
@@ -531,7 +520,6 @@ function LiveVerification() {
         await new Promise((r) => setTimeout(r, 500));
       }
 
-      // 3) Now teardown and go Home
       cleanup();
       navigate("/", { replace: true });
       setTimeout(() => {
@@ -540,7 +528,7 @@ function LiveVerification() {
     } catch (e) {
       console.error("Upload error:", e);
       setStatus("Upload error");
-      setIsProcessing(false); // allow retry
+      setIsProcessing(false);
       hasUploadedRef.current = false;
       uploadingRef.current = false;
     }
@@ -608,7 +596,7 @@ function LiveVerification() {
               />
             </mask>
 
-            {/* Single geometry source used by both strokes */}
+            {/* Single geometry source used by all strokes */}
             <ellipse
               id="face-geom"
               cx={dispEllipse.disp.cx}
@@ -621,12 +609,11 @@ function LiveVerification() {
           {/* Dark overlay with cutout */}
           <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#cutout-mask-live)"/>
 
-          {/* --- Color flip implementation --- */}
-          {/* 1) Base green dashed ring (full). This is what "completed" looks like. */}
+          {/* 1) Always-visible base: white dashed guide */}
           <use
             href="#face-geom"
             fill="none"
-            stroke="limegreen"
+            stroke="white"
             strokeWidth={GUIDE_STROKE}
             vectorEffect="non-scaling-stroke"
             strokeLinecap="round"
@@ -634,18 +621,17 @@ function LiveVerification() {
             strokeDasharray={DASH_PATTERN}
           />
 
-          {/* 2) White dashed ring on top, masked so only the remaining arc stays white.
-                 As progress grows, the white area shrinks clockwise, revealing green beneath. */}
-          {(() => {
+          {/* 2) During recording, overlay ONLY the progressed arc in green.
+                 No green is drawn at all before recording begins. */}
+          {isRecordingRef.current && recProgress > 0 && (() => {
             const { cx, cy, rx, ry } = dispEllipse.disp;
             const L = ellipsePerimeter(rx, ry);
-            const remaining = Math.max(0, 1 - recProgress);
-            const dashForMask = `${remaining * L} ${recProgress * L}`; // show only the remaining arc
+            const progressLen = Math.max(0, Math.min(L, recProgress * L)); // arc length to reveal
+            // Mask exposes just the leading arc from 12 o'clock clockwise
             return (
               <>
-                <mask id="remaining-mask" maskUnits="userSpaceOnUse">
+                <mask id="progress-mask" maskUnits="userSpaceOnUse">
                   <rect x="0" y="0" width={vp.w} height={vp.h} fill="black" />
-                  {/* Start at 12 o'clock and sweep clockwise */}
                   <g transform={`rotate(-90 ${cx} ${cy})`}>
                     <use
                       href="#face-geom"
@@ -654,27 +640,27 @@ function LiveVerification() {
                       strokeWidth={GUIDE_STROKE}
                       vectorEffect="non-scaling-stroke"
                       strokeLinecap="butt"
-                      strokeDasharray={dashForMask}
-                      strokeDashoffset={0}
+                      strokeDasharray={`${progressLen} ${Math.max(0, L - progressLen)}`}
+                      strokeDashoffset="0"
                     />
                   </g>
                 </mask>
 
+                {/* Same dashed path, painted green, but only where mask reveals it */}
                 <use
                   href="#face-geom"
                   fill="none"
-                  stroke="white"
+                  stroke="limegreen"
                   strokeWidth={GUIDE_STROKE}
                   vectorEffect="non-scaling-stroke"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   strokeDasharray={DASH_PATTERN}
-                  mask="url(#remaining-mask)"
+                  mask="url(#progress-mask)"
                 />
               </>
             );
           })()}
-          {/* --- end color flip --- */}
         </svg>
       )}
 
