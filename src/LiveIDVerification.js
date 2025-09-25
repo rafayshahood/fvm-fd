@@ -1,4 +1,6 @@
-// LiveIDVerification.jsx — new-script conditions + OCR metrics overlay (like the standalone demo)
+// LiveIDVerification.jsx — EXACT new-script overlays (ROI-only), metrics line, and colors.
+// Uses backend frame size to render boxes pixel-perfect on any device/orientation.
+
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -50,6 +52,7 @@ export default function LiveIDVerification() {
     };
   }, []);
 
+  // Compute how the video is letterboxed into the viewport (object-fit: contain)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale:1, dx:0, dy:0, dispW:0, dispH:0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -57,39 +60,39 @@ export default function LiveIDVerification() {
     return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
   }
 
-  // must match backend RECT_W_RATIO=0.95, RECT_H_RATIO=0.45
+  // Current displayed video rectangle on screen
   function currentDisplayRect() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
-    const rectW = dispW * 0.95;
-    const rectH = dispH * 0.45;
-    const rectX = dx + (dispW - rectW) / 2;
-    const rectY = dy + (dispH - rectH) / 2;
-    return { rectX, rectY, rectW, rectH, scale, dx, dy, vw, vh };
+    return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  function mapBoxToScreen(b) {
+  // --- Mapping helpers that normalize by BACKEND frame size (fw, fh) ---
+  function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current; if (!v || !b || b.length !== 4) return null;
-    const geo = currentDisplayRect(); if (!geo) return null;
-    const { vw, vh, scale, dx, dy } = geo;
-    if (!vw || !vh) return null;
+    const geo = currentDisplayRect(); if (!geo || !fw || !fh) return null;
+    const { dx, dy, dispW, dispH } = geo;
     const [x1,y1,x2,y2] = b.map(Number);
-    return { x: dx + x1*scale, y: dy + y1*scale, w: (x2-x1)*scale, h:(y2-y1)*scale };
+    return {
+      x: dx + (x1 / fw) * dispW,
+      y: dy + (y1 / fh) * dispH,
+      w: ((x2 - x1) / fw) * dispW,
+      h: ((y2 - y1) / fh) * dispH,
+    };
   }
-
-  function mapScreenRectToVideoRect(sx, sy, sw, sh) {
-    const v = videoRef.current; if (!v) return null;
-    const geo = currentDisplayRect(); if (!geo) return null;
-    const { vw, vh, scale, dx, dy } = geo;
-    const x1 = Math.max(0, Math.min(vw, (sx - dx) / scale));
-    const y1 = Math.max(0, Math.min(vh, (sy - dy) / scale));
-    const x2 = Math.max(0, Math.min(vw, (sx + sw - dx) / scale));
-    const y2 = Math.max(0, Math.min(vh, (sy + sh - dy) / scale));
-    const w = Math.max(1, Math.round(x2 - x1));
-    const h = Math.max(1, Math.round(y2 - y1));
-    return { x: Math.round(x1), y: Math.round(y1), w, h };
+  function mapRectToScreenRect(r, fw, fh) {
+    const v = videoRef.current; if (!v || !r || r.length !== 4) return null;
+    const geo = currentDisplayRect(); if (!geo || !fw || !fh) return null;
+    const { dx, dy, dispW, dispH } = geo;
+    const [rx, ry, rw, rh] = r.map(Number);
+    return {
+      x: dx + (rx / fw) * dispW,
+      y: dy + (ry / fh) * dispH,
+      w: (rw / fw) * dispW,
+      h: (rh / fh) * dispH,
+    };
   }
 
   async function getBestStream() {
@@ -114,6 +117,7 @@ export default function LiveIDVerification() {
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
 
+      // Continuous AF/AE when supported
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -143,7 +147,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // send loop (unchanged)
+  // send loop (downscale to ≤960 width; backend echoes frame_w/frame_h for proper overlay mapping)
   function startSendingFrames() {
     let stop = false;
     let sending = false;
@@ -196,18 +200,18 @@ export default function LiveIDVerification() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
-
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      const disp = currentDisplayRect();
-      if (!disp) throw new Error("Camera not ready");
-      const { rectX, rectY, rectW, rectH } = disp;
+      const fw = result?.frame_w, fh = result?.frame_h;
+      if (!fw || !fh) throw new Error("No backend frame size.");
 
-      const roi = mapScreenRectToVideoRect(rectX, rectY, rectW, rectH);
-      if (!roi) throw new Error("Camera not ready");
-      const { x, y, w, h } = roi;
+      // Use BACKEND’s guide rect for capture (exactly like the new script)
+      const guideOnScreen = mapRectToScreenRect(result?.rect, fw, fh);
+      if (!guideOnScreen) throw new Error("Guide not ready");
+      const { x, y, w, h } = mapScreenRectToVideoRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h);
+      if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
 
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
@@ -245,6 +249,20 @@ export default function LiveIDVerification() {
     }
   }
 
+  // Map from screen to VIDEO pixels (for capture)
+  function mapScreenRectToVideoRect(sx, sy, sw, sh) {
+    const v = videoRef.current; if (!v) return null;
+    const geo = currentDisplayRect(); if (!geo) return null;
+    const { vw, vh, dx, dy, dispW, dispH } = geo;
+    const x1 = Math.max(0, Math.min(vw, ((sx - dx) / dispW) * vw));
+    const y1 = Math.max(0, Math.min(vh, ((sy - dy) / dispH) * vh));
+    const x2 = Math.max(0, Math.min(vw, (((sx + sw) - dx) / dispW) * vw));
+    const y2 = Math.max(0, Math.min(vh, (((sy + sh) - dy) / dispH) * vh));
+    const w = Math.max(1, Math.round(x2 - x1));
+    const h = Math.max(1, Math.round(y2 - y1));
+    return { x: Math.round(x1), y: Math.round(y1), w, h };
+  }
+
   useEffect(() => {
     return () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
@@ -259,13 +277,11 @@ export default function LiveIDVerification() {
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result)   return "Connecting…";
-
     if (!result.id_card_detected)  return "📇 Place the ID card in view.";
-    if (!result.id_overlap_ok)     return "📐 Move the ID fully into the rectangle.";
-    if (!result.id_size_ok)        return "↔️ Move closer so the ID fills the rectangle.";
+    if (!result.id_overlap_ok)     return "📐 Move ID fully into the box.";
+    if (!result.id_size_ok)        return "↔️ Move closer so the ID fills the box.";
     if (!result.face_on_id)        return "👤 Make sure the ID portrait is visible.";
-    if (!result.ocr_ok)            return "🔎 Hold steady—text unclear (try tilting to reduce reflections).";
-
+    if (!result.ocr_ok)            return "🔎 Hold steady—text unclear.";
     return "✅ You can capture now.";
   })();
 
@@ -278,80 +294,114 @@ export default function LiveIDVerification() {
     result.face_on_id === true &&
     result.ocr_ok === true;
 
-  const rawBox    = mapBoxToScreen(result?.largest_bbox);
-  const idCardBox = mapBoxToScreen(result?.id_card_bbox);
-  const disp = currentDisplayRect();
-  const showMask = cameraOn && disp;
+  // Screen-space overlay geometry
+  const fw = result?.frame_w, fh = result?.frame_h;
+  const guideRect = result?.rect ? mapRectToScreenRect(result.rect, fw, fh) : null;
+  const idCardBox = result?.id_card_bbox ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
+  const faceBox   = result?.largest_bbox ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
-  // Formatters for OCR metrics (to mirror cv2.putText line)
+  // Colors to match cv2 version
+  const COLOR_GUIDE = "rgb(80,180,255)";    // (80,180,255)
+  const COLOR_ID    = result?.verified ? "rgb(0,220,0)" : "rgb(0,180,255)";
+  const COLOR_FACE  = "rgb(255,140,0)";
+
+  // OCR metrics line (same fields as cv2.putText)
   const fmt = (v, d=2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
-
-  // Where to place the OCR metrics panel: near the top of the guide box
-  const metricsLeft = disp ? disp.rectX + 8 : 8;
-  const metricsTop  = disp ? Math.max(8, disp.rectY - 42) : 8;
+  const metricsText = (result && idCardBox) ? [
+    `conf ${fmt(result.id_card_conf)}`,
+    `ar ${fmt(result.id_ar)}`,
+    `in ${fmt(result.id_frac_in)}`,
+    `size ${fmt(result.id_size_ratio)}`,
+    `txt_in ${fmt(result.ocr_inside_ratio)}`,
+    `hits ${result.ocr_hits ?? "—"}`,
+    `conf ${fmt(result.ocr_mean_conf)}`
+  ].join(" | ") : null;
 
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
       <video ref={videoRef} autoPlay muted playsInline
         style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }} />
 
-      {showMask && (
+      {(cameraOn && guideRect) && (
         <>
-          {/* SVG overlay for boxes */}
+          {/* SVG overlays (exact colors) */}
           <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
                style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+            {/* dim outside the guide */}
             <defs>
               <mask id="rect-cutout">
                 <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
-                <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
-                      rx="12" ry="12" fill="black" />
+                <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
+                      rx="0" ry="0" fill="black" />
               </mask>
             </defs>
-            {/* dim outside */}
             <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-            {/* guide */}
-            <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
-                  rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
-            {/* face on ID */}
-            {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
-                              fill="none" stroke="#ffd54f" strokeWidth="3" />}
-            {/* ID card bbox */}
-            {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                                fill="none" stroke="#34c759" strokeWidth="3" />}
+            {/* guide rectangle (solid, new-script color) */}
+            <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
+                  fill="none" stroke={COLOR_GUIDE} strokeWidth="2.5" />
+            {/* label above guide, like cv2.putText */}
+            <text x={guideRect.x} y={Math.max(16, guideRect.y - 8)} fill={COLOR_GUIDE}
+                  fontSize="14" fontFamily="system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Arial">
+              Place ID inside box
+            </text>
+
+            {/* ID bbox */}
+            {idCardBox && (
+              <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
+                    fill="none" stroke={COLOR_ID} strokeWidth="2.5" />
+            )}
+            {/* face-on-ID bbox */}
+            {faceBox && (
+              <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h}
+                    fill="none" stroke={COLOR_FACE} strokeWidth="2.5" />
+            )}
           </svg>
 
-          {/* OCR metrics panel (mirrors the cv2 debug line in new script) */}
-          <div
-            style={{
-              position:"absolute",
-              left: metricsLeft,
-              top: metricsTop,
-              background:"rgba(0,0,0,0.6)",
-              color:"#fff",
-              borderRadius:8,
-              padding:"6px 10px",
-              fontSize:13,
-              lineHeight:1.25,
-              pointerEvents:"none",
-              backdropFilter:"blur(3px)",
-            }}
-          >
-            {/* Show only when we have an ID box (like the demo) */}
-            {idCardBox ? (
-              <span style={{whiteSpace:"nowrap"}}>
-                {`txt_in ${fmt(result?.ocr_inside_ratio)} | hits ${result?.ocr_hits ?? "—"} | conf ${fmt(result?.ocr_mean_conf)}`}
-                {result?.ocr_ok ? " | OCR OK" : ""}
-              </span>
-            ) : (
-              <span>Looking for ID…</span>
-            )}
-          </div>
+          {/* OCR metrics line (mirrors the cv2 text) */}
+          {metricsText && idCardBox && (
+            <div
+              style={{
+                position:"absolute",
+                left: idCardBox.x,
+                top: Math.max(20, idCardBox.y - 10),
+                background:"rgba(0,0,0,0.6)",
+                color:"#fff",
+                borderRadius:6,
+                padding:"4px 8px",
+                fontSize:12.5,
+                lineHeight:1.25,
+                pointerEvents:"none",
+              }}
+            >
+              {metricsText}
+            </div>
+          )}
+
+          {/* Verified banner (same wording) */}
+          {result?.verified && idCardBox && (
+            <div
+              style={{
+                position:"absolute",
+                left: idCardBox.x,
+                top: Math.max(20, idCardBox.y - 28),
+                background:"rgba(0,0,0,0.6)",
+                color:"rgb(0,220,0)",
+                borderRadius:6,
+                padding:"4px 8px",
+                fontSize:14,
+                fontWeight:600,
+                pointerEvents:"none",
+              }}
+            >
+              ID VERIFIED (OCR + FACE)
+            </div>
+          )}
         </>
       )}
 
-      {/* guidance banner (same place as before) */}
+      {/* Top guidance banner (prompts) */}
       <div className="position-absolute w-100 d-flex justify-content-center"
-           style={{ top: Math.max(16, (disp ? disp.rectY : 0) - 60), left: 0, padding: "0 16px" }}>
+           style={{ top: 16, left: 0, padding: "0 16px" }}>
         <div style={{
           maxWidth:680, width:"100%", textAlign:"center",
           background:"rgba(0,0,0,0.6)", color:"#fff",
@@ -361,6 +411,7 @@ export default function LiveIDVerification() {
         </div>
       </div>
 
+      {/* Controls */}
       <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom:24, left:0, gap:8 }}>
         <div className="d-flex gap-2">
           {!cameraOn && (
