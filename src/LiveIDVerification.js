@@ -1,5 +1,4 @@
-// LiveIDVerification.jsx — ROI-only overlays, metrics, mobile-safe mapping,
-// guide prompt above the box, dashed-white guide, and AUTO-CAPTURE.
+// LiveIDVerification.jsx — Start Camera button restored + auto-capture kept
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -31,7 +30,7 @@ export default function LiveIDVerification() {
   const streamRef = useRef(null);
   const wsRef = useRef(null);
   const startedRef = useRef(false);
-  const autoCapturedRef = useRef(false); // guard to prevent double auto-capture
+  const autoCapturedRef = useRef(false);
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
@@ -59,8 +58,6 @@ export default function LiveIDVerification() {
     const dispW = vidW * scale, dispH = vidH * scale;
     return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
   }
-
-  // current displayed video rectangle on screen
   function currentDisplayRect() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
@@ -69,7 +66,7 @@ export default function LiveIDVerification() {
     return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  // --- Mapping helpers that normalize by BACKEND frame size (fw, fh) ---
+  // BACKEND-normalized mapping
   function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current; if (!v || !b || b.length !== 4) return null;
     const geo = currentDisplayRect(); if (!geo || !fw || !fh) return null;
@@ -117,7 +114,6 @@ export default function LiveIDVerification() {
       const v = videoRef.current; if (!v) return;
       v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
 
-      // Continuous AF/AE when supported
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -130,7 +126,8 @@ export default function LiveIDVerification() {
       v.addEventListener("loadedmetadata", function onLoaded() {
         v.removeEventListener("loadedmetadata", onLoaded);
         setStatus(`Video ${v.videoWidth}×${v.videoHeight}`);
-        v.play().catch(() => {}); setCameraOn(true);
+        v.play().catch(() => {});
+        setCameraOn(true);
       });
 
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
@@ -147,7 +144,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // send loop (≤960 width JPEG), backend computes & returns frame_w/frame_h
+  // send loop
   function startSendingFrames() {
     let stop = false;
     let sending = false;
@@ -196,7 +193,7 @@ export default function LiveIDVerification() {
     return () => { stop = true; };
   }
 
-  // AUTO-CAPTURE: when all gates pass, capture once
+  // AUTO-CAPTURE when all gates pass
   useEffect(() => {
     const allGreen =
       !!result &&
@@ -207,7 +204,7 @@ export default function LiveIDVerification() {
       result.ocr_ok === true;
 
     if (cameraOn && allGreen && !isUploading && !autoCapturedRef.current) {
-      autoCapturedRef.current = true; // guard
+      autoCapturedRef.current = true;
       handleCapture();
     }
   }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -223,9 +220,9 @@ export default function LiveIDVerification() {
       const fw = result?.frame_w, fh = result?.frame_h;
       if (!fw || !fh) throw new Error("No backend frame size.");
 
-      // Use BACKEND’s guide rect for capture
-      const guideOnScreen = guideRect; // already computed below
+      const guideOnScreen = guideRect;
       if (!guideOnScreen) throw new Error("Guide not ready");
+
       const { x, y, w, h } = mapScreenRectToVideoRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h);
       if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
 
@@ -260,13 +257,13 @@ export default function LiveIDVerification() {
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
-      autoCapturedRef.current = false; // allow retry on next allGreen
+      autoCapturedRef.current = false; // allow retry
     } finally {
       setIsUploading(false);
     }
   }
 
-  // Map from screen to VIDEO pixels (for capture)
+  // screen→video mapping for capture
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
     const v = videoRef.current; if (!v) return null;
     const geo = currentDisplayRect(); if (!geo) return null;
@@ -288,6 +285,7 @@ export default function LiveIDVerification() {
       if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
       startedRef.current = false;
       autoCapturedRef.current = false;
+      setCameraOn(false);
     };
   }, []);
 
@@ -303,13 +301,13 @@ export default function LiveIDVerification() {
     return "✅ Perfect. Capturing…";
   })();
 
-  // Screen-space overlay geometry
+  // Overlay geometry from backend frame size
   const fw = result?.frame_w, fh = result?.frame_h;
   const guideRect = result?.rect ? mapRectToScreenRect(result.rect, fw, fh) : null;
   const idCardBox = result?.id_card_bbox ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
   const faceBox   = result?.largest_bbox ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
-  // OCR metrics
+  // OCR metrics (debug line)
   const fmt = (v, d=2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
   const metricsText = (result && idCardBox) ? [
     `conf ${fmt(result.id_card_conf)}`,
@@ -328,7 +326,6 @@ export default function LiveIDVerification() {
 
       {(cameraOn && guideRect) && (
         <>
-          {/* SVG overlays */}
           <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
                style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
             <defs>
@@ -338,24 +335,19 @@ export default function LiveIDVerification() {
                       rx="12" ry="12" fill="black" />
               </mask>
             </defs>
-            {/* dim outside */}
             <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-            {/* guide rectangle — dashed white like before */}
             <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
                   rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
-            {/* ID bbox */}
             {idCardBox && (
               <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
                     fill="none" stroke={result?.verified ? "#00dc00" : "#00b4ff"} strokeWidth="3" />
             )}
-            {/* face-on-ID bbox */}
             {faceBox && (
               <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h}
                     fill="none" stroke="#ff8c00" strokeWidth="3" />
             )}
           </svg>
 
-          {/* OCR metrics line (near ID bbox like cv2) */}
           {metricsText && idCardBox && (
             <div
               style={{
@@ -375,7 +367,6 @@ export default function LiveIDVerification() {
             </div>
           )}
 
-          {/* Verified banner (same wording) */}
           {result?.verified && idCardBox && (
             <div
               style={{
@@ -397,7 +388,7 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Guidance banner — placed just ABOVE the guide rect */}
+      {/* Guidance banner (just above guide) */}
       {guideRect && (
         <div className="position-absolute w-100 d-flex justify-content-center"
              style={{ top: Math.max(16, guideRect.y - 60), left: 0, padding: "0 16px" }}>
@@ -408,6 +399,16 @@ export default function LiveIDVerification() {
           }}>
             {guidance}
           </div>
+        </div>
+      )}
+
+      {/* Start Camera button — visible until camera is on */}
+      {!cameraOn && (
+        <div className="position-absolute w-100 d-flex justify-content-center"
+             style={{ bottom:32, left:0 }}>
+          <button className="btn btn-primary" onClick={startCamera}>
+            Start Camera
+          </button>
         </div>
       )}
 
