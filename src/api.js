@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://fantastic-elimination-flags-genome.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://wagner-smaller-pacific-even.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
