@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://smart-poetry-readily-pdt.trycloudflare.com';
+const RUNPOD_DEFAULT = 'ttps://wishes-baker-subsidiaries-branches.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:

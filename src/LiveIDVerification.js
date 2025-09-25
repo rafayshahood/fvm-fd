@@ -1,4 +1,4 @@
-// LiveIDVerification.jsx — updated to ONLY use new-script conditions
+// LiveIDVerification.jsx — new-script conditions + OCR metrics overlay (like the standalone demo)
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -209,8 +209,6 @@ export default function LiveIDVerification() {
       if (!roi) throw new Error("Camera not ready");
       const { x, y, w, h } = roi;
 
-      // No old “fill/brightness/glare” gates — only capture when new checks are green (see canCapture below)
-
       const full = document.createElement("canvas");
       full.width = v.videoWidth; full.height = v.videoHeight;
       const fctx = full.getContext("2d", { alpha:false });
@@ -285,31 +283,73 @@ export default function LiveIDVerification() {
   const disp = currentDisplayRect();
   const showMask = cameraOn && disp;
 
+  // Formatters for OCR metrics (to mirror cv2.putText line)
+  const fmt = (v, d=2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
+
+  // Where to place the OCR metrics panel: near the top of the guide box
+  const metricsLeft = disp ? disp.rectX + 8 : 8;
+  const metricsTop  = disp ? Math.max(8, disp.rectY - 42) : 8;
+
   return (
     <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
       <video ref={videoRef} autoPlay muted playsInline
         style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }} />
 
       {showMask && (
-        <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
-             style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-          <defs>
-            <mask id="rect-cutout">
-              <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
-              <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
-                    rx="12" ry="12" fill="black" />
-            </mask>
-          </defs>
-          <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-          <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
-                rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
-          {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
-                            fill="none" stroke="#ffd54f" strokeWidth="3" />}
-          {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                              fill="none" stroke="#34c759" strokeWidth="3" />}
-        </svg>
+        <>
+          {/* SVG overlay for boxes */}
+          <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
+               style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+            <defs>
+              <mask id="rect-cutout">
+                <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
+                <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                      rx="12" ry="12" fill="black" />
+              </mask>
+            </defs>
+            {/* dim outside */}
+            <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
+            {/* guide */}
+            <rect x={disp.rectX} y={disp.rectY} width={disp.rectW} height={disp.rectH}
+                  rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
+            {/* face on ID */}
+            {rawBox &&  <rect x={rawBox.x} y={rawBox.y} width={rawBox.w} height={rawBox.h}
+                              fill="none" stroke="#ffd54f" strokeWidth="3" />}
+            {/* ID card bbox */}
+            {idCardBox && <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
+                                fill="none" stroke="#34c759" strokeWidth="3" />}
+          </svg>
+
+          {/* OCR metrics panel (mirrors the cv2 debug line in new script) */}
+          <div
+            style={{
+              position:"absolute",
+              left: metricsLeft,
+              top: metricsTop,
+              background:"rgba(0,0,0,0.6)",
+              color:"#fff",
+              borderRadius:8,
+              padding:"6px 10px",
+              fontSize:13,
+              lineHeight:1.25,
+              pointerEvents:"none",
+              backdropFilter:"blur(3px)",
+            }}
+          >
+            {/* Show only when we have an ID box (like the demo) */}
+            {idCardBox ? (
+              <span style={{whiteSpace:"nowrap"}}>
+                {`txt_in ${fmt(result?.ocr_inside_ratio)} | hits ${result?.ocr_hits ?? "—"} | conf ${fmt(result?.ocr_mean_conf)}`}
+                {result?.ocr_ok ? " | OCR OK" : ""}
+              </span>
+            ) : (
+              <span>Looking for ID…</span>
+            )}
+          </div>
+        </>
       )}
 
+      {/* guidance banner (same place as before) */}
       <div className="position-absolute w-100 d-flex justify-content-center"
            style={{ top: Math.max(16, (disp ? disp.rectY : 0) - 60), left: 0, padding: "0 16px" }}>
         <div style={{
