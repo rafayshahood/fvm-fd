@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://pens-fighters-wesley-trans.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://biodiversity-bool-reservations-involve.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:

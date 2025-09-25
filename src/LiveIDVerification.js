@@ -1,4 +1,6 @@
-// LiveIDVerification.jsx — Start Camera button restored + auto-capture kept
+// LiveIDVerification.jsx — Start Camera button visible until camera starts,
+// status row hidden until cameraOn === true, and guide rectangle shows immediately
+// using a local placeholder (0.95 × 0.45) before backend rect arrives.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -7,18 +9,61 @@ import { ensureReqId, getReqId } from "./storage";
 
 function BlockingOverlay({ text = "Processing… Please wait." }) {
   return (
-    <div role="alert" aria-busy="true" style={{
-      position:"fixed", inset:0, background:"rgba(0,0,0,0.65)",
-      display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-      zIndex:9999, backdropFilter:"blur(2px)", pointerEvents:"all"
-    }}>
+    <div
+      role="alert"
+      aria-busy="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        backdropFilter: "blur(2px)",
+        pointerEvents: "all",
+      }}
+    >
       <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
-        <circle cx="25" cy="25" r="20" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" opacity="0.25" />
-        <path fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" d="M25 5 a20 20 0 0 1 0 40">
-          <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite" />
+        <circle
+          cx="25"
+          cy="25"
+          r="20"
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          opacity="0.25"
+        />
+        <path
+          fill="none"
+          stroke="white"
+          strokeWidth="5"
+          strokeLinecap="round"
+          d="M25 5 a20 20 0 0 1 0 40"
+        >
+          <animateTransform
+            attributeName="transform"
+            type="rotate"
+            from="0 25 25"
+            to="360 25 25"
+            dur="0.9s"
+            repeatCount="indefinite"
+          />
         </path>
       </svg>
-      <div style={{ marginTop:14, color:"#fff", fontSize:16, textAlign:"center", padding:"6px 10px" }}>{text}</div>
+      <div
+        style={{
+          marginTop: 14,
+          color: "#fff",
+          fontSize: 16,
+          textAlign: "center",
+          padding: "6px 10px",
+        }}
+      >
+        {text}
+      </div>
     </div>
   );
 }
@@ -40,10 +85,17 @@ export default function LiveIDVerification() {
   // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
-    h: typeof window !== "undefined" ? (window.visualViewport?.height ?? window.innerHeight) : 0,
+    h:
+      typeof window !== "undefined"
+        ? window.visualViewport?.height ?? window.innerHeight
+        : 0,
   });
   useEffect(() => {
-    const onResize = () => setVp({ w: window.innerWidth, h: window.visualViewport?.height ?? window.innerHeight });
+    const onResize = () =>
+      setVp({
+        w: window.innerWidth,
+        h: window.visualViewport?.height ?? window.innerHeight,
+      });
     window.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("resize", onResize);
     return () => {
@@ -53,14 +105,18 @@ export default function LiveIDVerification() {
   }, []);
 
   function containLayout(containerW, containerH, vidW, vidH) {
-    if (!vidW || !vidH) return { scale:1, dx:0, dy:0, dispW:0, dispH:0 };
+    if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
-    const dispW = vidW * scale, dispH = vidH * scale;
-    return { scale, dx:(containerW - dispW)/2, dy:(containerH - dispH)/2, dispW, dispH };
+    const dispW = vidW * scale,
+      dispH = vidH * scale;
+    return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
+
   function currentDisplayRect() {
-    const v = videoRef.current; if (!v) return null;
-    const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
+    const v = videoRef.current;
+    if (!v) return null;
+    const vw = v.videoWidth || 0,
+      vh = v.videoHeight || 0;
     if (!vw || !vh) return null;
     const { scale, dx, dy, dispW, dispH } = containLayout(vp.w, vp.h, vw, vh);
     return { scale, dx, dy, dispW, dispH, vw, vh };
@@ -68,10 +124,12 @@ export default function LiveIDVerification() {
 
   // BACKEND-normalized mapping
   function mapBoxToScreen(b, fw, fh) {
-    const v = videoRef.current; if (!v || !b || b.length !== 4) return null;
-    const geo = currentDisplayRect(); if (!geo || !fw || !fh) return null;
+    const v = videoRef.current;
+    if (!v || !b || b.length !== 4) return null;
+    const geo = currentDisplayRect();
+    if (!geo || !fw || !fh) return null;
     const { dx, dy, dispW, dispH } = geo;
-    const [x1,y1,x2,y2] = b.map(Number);
+    const [x1, y1, x2, y2] = b.map(Number);
     return {
       x: dx + (x1 / fw) * dispW,
       y: dy + (y1 / fh) * dispH,
@@ -79,9 +137,12 @@ export default function LiveIDVerification() {
       h: ((y2 - y1) / fh) * dispH,
     };
   }
+
   function mapRectToScreenRect(r, fw, fh) {
-    const v = videoRef.current; if (!v || !r || r.length !== 4) return null;
-    const geo = currentDisplayRect(); if (!geo || !fw || !fh) return null;
+    const v = videoRef.current;
+    if (!v || !r || r.length !== 4) return null;
+    const geo = currentDisplayRect();
+    if (!geo || !fw || !fh) return null;
     const { dx, dy, dispW, dispH } = geo;
     const [rx, ry, rw, rh] = r.map(Number);
     return {
@@ -92,14 +153,46 @@ export default function LiveIDVerification() {
     };
   }
 
+  // Local placeholder guide (shown immediately on camera start)
+  function localGuideRect() {
+    const geo = currentDisplayRect();
+    if (!geo) return null;
+    const { dx, dy, dispW, dispH } = geo;
+    const rectW = dispW * 0.95; // must match backend RECT_W_RATIO
+    const rectH = dispH * 0.45; // must match backend RECT_H_RATIO
+    const rectX = dx + (dispW - rectW) / 2;
+    const rectY = dy + (dispH - rectH) / 2;
+    return { x: rectX, y: rectY, w: rectW, h: rectH };
+  }
+
   async function getBestStream() {
     const trials = [
-      { video: { facingMode:{ ideal:"environment" }, width:{ ideal:1920 }, height:{ ideal:1080 } }, audio:false },
-      { video: { facingMode:{ ideal:"environment" }, width:{ ideal:1280 }, height:{ ideal:720 } },  audio:false },
-      { video: { facingMode:{ ideal:"environment" } }, audio:false },
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      { video: { facingMode: { ideal: "environment" } }, audio: false },
     ];
     let err = null;
-    for (const c of trials) { try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { err = e; } }
+    for (const c of trials) {
+      try {
+        return await navigator.mediaDevices.getUserMedia(c);
+      } catch (e) {
+        err = e;
+      }
+    }
     throw err || new Error("Camera unavailable");
   }
 
@@ -111,15 +204,20 @@ export default function LiveIDVerification() {
       const reqId = await ensureReqId(API_BASE);
       const stream = await getBestStream();
       streamRef.current = stream;
-      const v = videoRef.current; if (!v) return;
-      v.srcObject = stream; v.muted = true; v.setAttribute("playsInline","true");
+      const v = videoRef.current;
+      if (!v) return;
+      v.srcObject = stream;
+      v.muted = true;
+      v.setAttribute("playsInline", "true");
 
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
         const cons = {};
-        if (caps.focusMode && caps.focusMode.includes("continuous")) cons.focusMode = "continuous";
-        if (caps.exposureMode && caps.exposureMode.includes("continuous")) cons.exposureMode = "continuous";
+        if (caps.focusMode && caps.focusMode.includes("continuous"))
+          cons.focusMode = "continuous";
+        if (caps.exposureMode && caps.exposureMode.includes("continuous"))
+          cons.exposureMode = "continuous";
         if (Object.keys(cons).length) await track.applyConstraints({ advanced: [cons] });
       } catch {}
 
@@ -127,20 +225,25 @@ export default function LiveIDVerification() {
         v.removeEventListener("loadedmetadata", onLoaded);
         setStatus(`Video ${v.videoWidth}×${v.videoHeight}`);
         v.play().catch(() => {});
-        setCameraOn(true);
+        setCameraOn(true); // status bar will start rendering only after this
       });
 
       const ws = new WebSocket(`${WS_BASE}/ws-id-live?req_id=${encodeURIComponent(reqId)}`);
       ws.onopen = () => setStatus("WS connected, streaming frames…");
       ws.onclose = () => setStatus("WS closed");
       ws.onerror = () => setStatus("WS error");
-      ws.onmessage = (evt) => { try { setResult(JSON.parse(evt.data)); } catch {} };
+      ws.onmessage = (evt) => {
+        try {
+          setResult(JSON.parse(evt.data));
+        } catch {}
+      };
       wsRef.current = ws;
       startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
-      startedRef.current = false; setCameraOn(false);
+      startedRef.current = false;
+      setCameraOn(false);
     }
   }
 
@@ -156,18 +259,34 @@ export default function LiveIDVerification() {
 
     const loop = () => {
       if (stop) return;
-      const v = videoRef.current, ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN) { requestAnimationFrame(loop); return; }
+      const v = videoRef.current,
+        ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN) {
+        requestAnimationFrame(loop);
+        return;
+      }
 
       const now = performance.now();
       frameCounter += 1;
       const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
-      const ratioOk = (frameCounter % 5 === 0);
-      if (!timeOk && !ratioOk) { requestAnimationFrame(loop); return; }
+      const ratioOk = frameCounter % 5 === 0;
+      if (!timeOk && !ratioOk) {
+        requestAnimationFrame(loop);
+        return;
+      }
 
-      if (sending) { requestAnimationFrame(loop); return; }
-      if (ws.bufferedAmount > MAX_BUFFERED) { requestAnimationFrame(loop); return; }
-      if (!(v.videoWidth && v.videoHeight)) { requestAnimationFrame(loop); return; }
+      if (sending) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      if (ws.bufferedAmount > MAX_BUFFERED) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      if (!(v.videoWidth && v.videoHeight)) {
+        requestAnimationFrame(loop);
+        return;
+      }
 
       sending = true;
       try {
@@ -177,12 +296,18 @@ export default function LiveIDVerification() {
         const H = Math.round(v.videoHeight * scale);
 
         const canvas = document.createElement("canvas");
-        canvas.width = W; canvas.height = H;
-        const ctx = canvas.getContext("2d", { alpha:false });
+        canvas.width = W;
+        canvas.height = H;
+        const ctx = canvas.getContext("2d", { alpha: false });
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(v, 0, 0, W, H);
         const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
-        if (b64) { try { ws.send(b64); lastSentAt = now; } catch {} }
+        if (b64) {
+          try {
+            ws.send(b64);
+            lastSentAt = now;
+          } catch {}
+        }
       } finally {
         sending = false;
         setTimeout(() => requestAnimationFrame(loop), 16);
@@ -190,10 +315,12 @@ export default function LiveIDVerification() {
     };
 
     requestAnimationFrame(loop);
-    return () => { stop = true; };
+    return () => {
+      stop = true;
+    };
   }
 
-  // AUTO-CAPTURE when all gates pass
+  // AUTO-CAPTURE when all gates pass (unchanged)
   useEffect(() => {
     const allGreen =
       !!result &&
@@ -217,24 +344,32 @@ export default function LiveIDVerification() {
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      const fw = result?.frame_w, fh = result?.frame_h;
+      const fw = result?.frame_w,
+        fh = result?.frame_h;
       if (!fw || !fh) throw new Error("No backend frame size.");
 
       const guideOnScreen = guideRect;
       if (!guideOnScreen) throw new Error("Guide not ready");
 
-      const { x, y, w, h } = mapScreenRectToVideoRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h);
+      const { x, y, w, h } = mapScreenRectToVideoRect(
+        guideOnScreen.x,
+        guideOnScreen.y,
+        guideOnScreen.w,
+        guideOnScreen.h
+      );
       if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
 
       const full = document.createElement("canvas");
-      full.width = v.videoWidth; full.height = v.videoHeight;
-      const fctx = full.getContext("2d", { alpha:false });
+      full.width = v.videoWidth;
+      full.height = v.videoHeight;
+      const fctx = full.getContext("2d", { alpha: false });
       fctx.imageSmoothingEnabled = false;
       fctx.drawImage(v, 0, 0, full.width, full.height);
 
       const crop = document.createElement("canvas");
-      crop.width = w; crop.height = h;
-      const cctx = crop.getContext("2d", { alpha:false });
+      crop.width = w;
+      crop.height = h;
+      const cctx = crop.getContext("2d", { alpha: false });
       cctx.imageSmoothingEnabled = false;
       cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
 
@@ -242,18 +377,31 @@ export default function LiveIDVerification() {
       const form = new FormData();
       form.append("image", blob, "id_roi.jpg");
 
-      const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
-        method:"POST", body: form
-      });
+      const resp = await fetch(
+        `${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`,
+        { method: "POST", body: form }
+      );
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
       // cleanup
-      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        try {
+          wsRef.current.close();
+        } catch {}
+      }
       wsRef.current = null;
-      if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-      if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
-      navigate("/", { replace:true });
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        try {
+          videoRef.current.pause();
+        } catch {}
+        videoRef.current.srcObject = null;
+      }
+      navigate("/", { replace: true });
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
@@ -265,8 +413,10 @@ export default function LiveIDVerification() {
 
   // screen→video mapping for capture
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
-    const v = videoRef.current; if (!v) return null;
-    const geo = currentDisplayRect(); if (!geo) return null;
+    const v = videoRef.current;
+    if (!v) return null;
+    const geo = currentDisplayRect();
+    if (!geo) return null;
     const { vw, vh, dx, dy, dispW, dispH } = geo;
     const x1 = Math.max(0, Math.min(vw, ((sx - dx) / dispW) * vw));
     const y1 = Math.max(0, Math.min(vh, ((sy - dy) / dispH) * vh));
@@ -281,8 +431,16 @@ export default function LiveIDVerification() {
     return () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
       wsRef.current = null;
-      if (streamRef.current) { streamRef.current.getTracks().forEach((t) => t.stop()); streamRef.current = null; }
-      if (videoRef.current) { try { videoRef.current.pause(); } catch {}; videoRef.current.srcObject = null; }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      if (videoRef.current) {
+        try {
+          videoRef.current.pause();
+        } catch {}
+        videoRef.current.srcObject = null;
+      }
       startedRef.current = false;
       autoCapturedRef.current = false;
       setCameraOn(false);
@@ -292,94 +450,160 @@ export default function LiveIDVerification() {
   // --- Guidance (only new checks) ---
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
-    if (!result)   return "Connecting…";
-    if (!result.id_card_detected)  return "📇 Place the ID card in view.";
-    if (!result.id_overlap_ok)     return "📐 Move ID fully into the box.";
-    if (!result.id_size_ok)        return "↔️ Move closer so the ID fills the box.";
-    if (!result.face_on_id)        return "👤 Make sure the ID portrait is visible.";
-    if (!result.ocr_ok)            return "🔎 Hold steady—text unclear.";
+    if (!result) return "Connecting…";
+    if (!result.id_card_detected) return "📇 Place the ID card in view.";
+    if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
+    if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
+    if (!result.face_on_id) return "👤 Make sure the ID portrait is visible.";
+    if (!result.ocr_ok) return "🔎 Hold steady—text unclear.";
     return "✅ Perfect. Capturing…";
   })();
 
-  // Overlay geometry from backend frame size
-  const fw = result?.frame_w, fh = result?.frame_h;
-  const guideRect = result?.rect ? mapRectToScreenRect(result.rect, fw, fh) : null;
-  const idCardBox = result?.id_card_bbox ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
-  const faceBox   = result?.largest_bbox ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
+  // Overlay geometry
+  const fw = result?.frame_w,
+    fh = result?.frame_h;
+  const backendGuide =
+    result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
+  const guideRect = backendGuide || localGuideRect(); // always show something once cameraOn
+
+  const idCardBox =
+    result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
+  const faceBox =
+    result?.largest_bbox && fw && fh ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
   // OCR metrics (debug line)
-  const fmt = (v, d=2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
-  const metricsText = (result && idCardBox) ? [
-    `conf ${fmt(result.id_card_conf)}`,
-    `ar ${fmt(result.id_ar)}`,
-    `in ${fmt(result.id_frac_in)}`,
-    `size ${fmt(result.id_size_ratio)}`,
-    `txt_in ${fmt(result.ocr_inside_ratio)}`,
-    `hits ${result.ocr_hits ?? "—"}`,
-    `conf ${fmt(result.ocr_mean_conf)}`
-  ].join(" | ") : null;
+  const fmt = (v, d = 2) =>
+    typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—";
+  const metricsText =
+    result && idCardBox
+      ? [
+          `conf ${fmt(result.id_card_conf)}`,
+          `ar ${fmt(result.id_ar)}`,
+          `in ${fmt(result.id_frac_in)}`,
+          `size ${fmt(result.id_size_ratio)}`,
+          `txt_in ${fmt(result.ocr_inside_ratio)}`,
+          `hits ${result.ocr_hits ?? "—"}`,
+          `conf ${fmt(result.ocr_mean_conf)}`,
+        ].join(" | ")
+      : null;
 
   return (
-    <div className="position-relative" style={{ width:"100vw", height:"100dvh", overflow:"hidden", background:"#000" }}>
-      <video ref={videoRef} autoPlay muted playsInline
-        style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }} />
+    <div
+      className="position-relative"
+      style={{ width: "100vw", height: "100dvh", overflow: "hidden", background: "#000" }}
+    >
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
+      />
 
-      {(cameraOn && guideRect) && (
+      {cameraOn && guideRect && (
         <>
-          <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`}
-               style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
+          <svg
+            width={vp.w}
+            height={vp.h}
+            viewBox={`0 0 ${vp.w} ${vp.h}`}
+            style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+          >
             <defs>
               <mask id="rect-cutout">
                 <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
-                <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
-                      rx="12" ry="12" fill="black" />
+                <rect
+                  x={guideRect.x}
+                  y={guideRect.y}
+                  width={guideRect.w}
+                  height={guideRect.h}
+                  rx="12"
+                  ry="12"
+                  fill="black"
+                />
               </mask>
             </defs>
-            <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-            <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h}
-                  rx="12" ry="12" fill="none" stroke="white" strokeWidth="3" strokeDasharray="6 6" />
+            {/* dim outside guide */}
+            <rect
+              x="0"
+              y="0"
+              width={vp.w}
+              height={vp.h}
+              fill="rgba(0,0,0,0.55)"
+              mask="url(#rect-cutout)"
+            />
+            {/* guide outline */}
+            <rect
+              x={guideRect.x}
+              y={guideRect.y}
+              width={guideRect.w}
+              height={guideRect.h}
+              rx="12"
+              ry="12"
+              fill="none"
+              stroke="white"
+              strokeWidth="3"
+              strokeDasharray="6 6"
+            />
+            {/* ID bbox */}
             {idCardBox && (
-              <rect x={idCardBox.x} y={idCardBox.y} width={idCardBox.w} height={idCardBox.h}
-                    fill="none" stroke={result?.verified ? "#00dc00" : "#00b4ff"} strokeWidth="3" />
+              <rect
+                x={idCardBox.x}
+                y={idCardBox.y}
+                width={idCardBox.w}
+                height={idCardBox.h}
+                fill="none"
+                stroke={result?.verified ? "#00dc00" : "#00b4ff"}
+                strokeWidth="3"
+              />
             )}
+            {/* face on ID */}
             {faceBox && (
-              <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h}
-                    fill="none" stroke="#ff8c00" strokeWidth="3" />
+              <rect
+                x={faceBox.x}
+                y={faceBox.y}
+                width={faceBox.w}
+                height={faceBox.h}
+                fill="none"
+                stroke="#ff8c00"
+                strokeWidth="3"
+              />
             )}
           </svg>
 
+          {/* OCR metrics panel */}
           {metricsText && idCardBox && (
             <div
               style={{
-                position:"absolute",
+                position: "absolute",
                 left: idCardBox.x,
                 top: Math.max(20, idCardBox.y - 10),
-                background:"rgba(0,0,0,0.6)",
-                color:"#fff",
-                borderRadius:6,
-                padding:"4px 8px",
-                fontSize:12.5,
-                lineHeight:1.25,
-                pointerEvents:"none",
+                background: "rgba(0,0,0,0.6)",
+                color: "#fff",
+                borderRadius: 6,
+                padding: "4px 8px",
+                fontSize: 12.5,
+                lineHeight: 1.25,
+                pointerEvents: "none",
               }}
             >
               {metricsText}
             </div>
           )}
 
+          {/* Verified badge */}
           {result?.verified && idCardBox && (
             <div
               style={{
-                position:"absolute",
+                position: "absolute",
                 left: idCardBox.x,
                 top: Math.max(20, idCardBox.y - 28),
-                background:"rgba(0,0,0,0.6)",
-                color:"rgb(0,220,0)",
-                borderRadius:6,
-                padding:"4px 8px",
-                fontSize:14,
-                fontWeight:600,
-                pointerEvents:"none",
+                background: "rgba(0,0,0,0.6)",
+                color: "rgb(0,220,0)",
+                borderRadius: 6,
+                padding: "4px 8px",
+                fontSize: 14,
+                fontWeight: 600,
+                pointerEvents: "none",
               }}
             >
               ID VERIFIED (OCR + FACE)
@@ -388,15 +612,25 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Guidance banner (just above guide) */}
-      {guideRect && (
-        <div className="position-absolute w-100 d-flex justify-content-center"
-             style={{ top: Math.max(16, guideRect.y - 60), left: 0, padding: "0 16px" }}>
-          <div style={{
-            maxWidth:680, width:"100%", textAlign:"center",
-            background:"rgba(0,0,0,0.6)", color:"#fff",
-            borderRadius:12, padding:"10px 14px", fontSize:16, backdropFilter:"blur(4px)"
-          }}>
+      {/* Guidance banner — "just above" the rectangle (closer than before) */}
+      {cameraOn && guideRect && (
+        <div
+          className="position-absolute w-100 d-flex justify-content-center"
+          style={{ top: Math.max(8, guideRect.y - 16), left: 0, padding: "0 16px" }}
+        >
+          <div
+            style={{
+              maxWidth: 680,
+              width: "100%",
+              textAlign: "center",
+              background: "rgba(0,0,0,0.6)",
+              color: "#fff",
+              borderRadius: 12,
+              padding: "10px 14px",
+              fontSize: 16,
+              backdropFilter: "blur(4px)",
+            }}
+          >
             {guidance}
           </div>
         </div>
@@ -404,21 +638,32 @@ export default function LiveIDVerification() {
 
       {/* Start Camera button — visible until camera is on */}
       {!cameraOn && (
-        <div className="position-absolute w-100 d-flex justify-content-center"
-             style={{ bottom:32, left:0 }}>
+        <div className="position-absolute w-100 d-flex justify-content-center" style={{ bottom: 32, left: 0 }}>
           <button className="btn btn-primary" onClick={startCamera}>
             Start Camera
           </button>
         </div>
       )}
 
-      {/* Bottom status */}
-      <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom:24, left:0, gap:8 }}>
-        <div className="text-light text-center"
-             style={{ background:"rgba(0,0,0,0.35)", borderRadius:12, padding:"6px 10px", fontSize:12 }}>
-          {status}
+      {/* Bottom status — HIDDEN until camera is on (fixes overlap with Start button) */}
+      {cameraOn && (
+        <div
+          className="position-absolute w-100 d-flex flex-column align-items-center"
+          style={{ bottom: 24, left: 0, gap: 8 }}
+        >
+          <div
+            className="text-light text-center"
+            style={{
+              background: "rgba(0,0,0,0.35)",
+              borderRadius: 12,
+              padding: "6px 10px",
+              fontSize: 12,
+            }}
+          >
+            {status}
+          </div>
         </div>
-      </div>
+      )}
 
       {isUploading && <BlockingOverlay text="Processing your ID… Please wait." />}
     </div>
