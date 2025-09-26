@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://laboratories-travelling-commands-responsible.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://foot-toe-anti-husband.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
