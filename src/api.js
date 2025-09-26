@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://2baj3omlbmnbh5-8888.proxy.runpod.net';
+const RUNPOD_DEFAULT = 'https://regression-possession-cited-iron.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
