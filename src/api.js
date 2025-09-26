@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://dom-hoped-zen-sell.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://attempted-witch-integrate-applications.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:

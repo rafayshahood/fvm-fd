@@ -1,7 +1,6 @@
 // LiveIDVerification.jsx — viewport-sized streaming & capture
-// Now uses the SAME camera constraint style as the selfie page:
-//   { video: { facingMode: { ideal: "environment" } }, audio: false }
-// so the displayed dimensions match LiveVerification.
+// Matches LiveVerification pacing; WS frames are full-sensor;
+// final upload is the FULL frame (no ROI crop).
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -46,6 +45,8 @@ export default function LiveIDVerification() {
   const startedRef = useRef(false);
   const autoCapturedRef = useRef(false);
 
+  const sendTickRef = useRef(0);
+
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -88,7 +89,7 @@ export default function LiveIDVerification() {
     return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  // BACKEND-normalized mapping
+  // BACKEND-normalized mapping (for overlay only)
   function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current;
     if (!v || !b || b.length !== 4) return null;
@@ -119,21 +120,6 @@ export default function LiveIDVerification() {
     };
   }
 
-  function mapScreenRectToFrameRect(sx, sy, sw, sh, frameW, frameH) {
-    const geo = currentDisplayRect();
-    if (!geo) return null;
-    const { dx, dy, dispW, dispH } = geo;
-    const x1n = (sx - dx) / dispW;
-    const y1n = (sy - dy) / dispH;
-    const x2n = (sx + sw - dx) / dispW;
-    const y2n = (sy + sh - dy) / dispH;
-    const x1 = Math.max(0, Math.min(frameW, Math.round(x1n * frameW)));
-    const y1 = Math.max(0, Math.min(frameH, Math.round(y1n * frameH)));
-    const x2 = Math.max(0, Math.min(frameW, Math.round(x2n * frameW)));
-    const y2 = Math.max(0, Math.min(frameH, Math.round(y2n * frameH)));
-    return { x: x1, y: y1, w: Math.max(1, x2 - x1), h: Math.max(1, y2 - y1) };
-  }
-
   // Local placeholder guide (shown immediately on camera start)
   function localGuideRect() {
     const geo = currentDisplayRect();
@@ -146,7 +132,7 @@ export default function LiveIDVerification() {
     return { x: rectX, y: rectY, w: rectW, h: rectH };
   }
 
-  // ✅ Same style as LiveVerification: no explicit width/height forcing
+  // ✅ Same constraints style as video page
   async function getBestStream() {
     return await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
@@ -203,75 +189,37 @@ export default function LiveIDVerification() {
     }
   }
 
-  // viewport-sized streaming (matches what the user sees)
+  // --- MATCH LiveVerification pacing exactly ---
+  const SEND_FRAME_INTERVAL_MS = 80;
+  const SEND_EVERY_NTH_FRAME = 5;
+
   function startSendingFrames() {
     let stop = false;
-    let sending = false;
-    let lastSentAt = 0;
-    let frameCounter = 0;
-    const TARGET_FPS = 30;
-    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS);
-    const MAX_BUFFERED = 256 * 1024;
-    const MAX_SIDE = 960;
-
     const loop = () => {
       if (stop) return;
-      const v = videoRef.current,
-        ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN) {
+      const v = videoRef.current, ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
         requestAnimationFrame(loop);
         return;
       }
 
-      const now = performance.now();
-      frameCounter += 1;
-      const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
-      const ratioOk = frameCounter % 5 === 0;
-      if (!timeOk && !ratioOk) {
-        requestAnimationFrame(loop);
-        return;
-      }
-      if (sending || ws.bufferedAmount > MAX_BUFFERED || !(v.videoWidth && v.videoHeight)) {
-        requestAnimationFrame(loop);
-        return;
-      }
+      // Send FULL sensor frame to analyzer (no display scaling)
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
 
-      const geo = currentDisplayRect();
-      if (!geo || !geo.dispW || !geo.dispH) {
-        requestAnimationFrame(loop);
-        return;
+      sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
+      if (sendTickRef.current === 0) {
+        const b64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+        if (b64) { try { ws.send(b64); } catch {} }
       }
 
-      sending = true;
-      try {
-        const scale = Math.min(1, MAX_SIDE / Math.max(geo.dispW, geo.dispH));
-        const FW = Math.max(2, Math.round(geo.dispW * scale));
-        const FH = Math.max(2, Math.round(geo.dispH * scale));
-
-        const canvas = document.createElement("canvas");
-        canvas.width = FW;
-        canvas.height = FH;
-        const ctx = canvas.getContext("2d", { alpha: false });
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(v, 0, 0, FW, FH);
-
-        const b64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
-        if (b64) {
-          try {
-            ws.send(b64);
-            lastSentAt = now;
-          } catch {}
-        }
-      } finally {
-        sending = false;
-        setTimeout(() => requestAnimationFrame(loop), 16);
-      }
+      setTimeout(() => requestAnimationFrame(loop), SEND_FRAME_INTERVAL_MS);
     };
-
     requestAnimationFrame(loop);
-    return () => {
-      stop = true;
-    };
+    return () => { stop = true; };
   }
 
   // AUTO-CAPTURE when all gates pass
@@ -290,6 +238,7 @@ export default function LiveIDVerification() {
     }
   }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⬇️ FINAL CAPTURE: upload FULL frame (not ROI)
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
@@ -298,33 +247,19 @@ export default function LiveIDVerification() {
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      const geo = currentDisplayRect();
-      if (!geo) throw new Error("Camera not ready");
-      const FW = Math.round(geo.dispW);
-      const FH = Math.round(geo.dispH);
+      const FW = v.videoWidth, FH = v.videoHeight;
+      if (!FW || !FH) throw new Error("Camera not ready");
 
-      const base = document.createElement("canvas");
-      base.width = FW;
-      base.height = FH;
-      const bctx = base.getContext("2d", { alpha: false });
-      bctx.imageSmoothingEnabled = false;
-      bctx.drawImage(v, 0, 0, FW, FH);
+      const fullCanvas = document.createElement("canvas");
+      fullCanvas.width = FW;
+      fullCanvas.height = FH;
+      const fctx = fullCanvas.getContext("2d", { alpha: false });
+      fctx.imageSmoothingEnabled = false;
+      fctx.drawImage(v, 0, 0, FW, FH);
 
-      const guideOnScreen = guideRect;
-      if (!guideOnScreen) throw new Error("Guide not ready");
-      const cropRect = mapScreenRectToFrameRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h, FW, FH);
-      if (!cropRect || !(cropRect.w > 0 && cropRect.h > 0)) throw new Error("Crop failed");
-
-      const crop = document.createElement("canvas");
-      crop.width = cropRect.w;
-      crop.height = cropRect.h;
-      const cctx = crop.getContext("2d", { alpha: false });
-      cctx.imageSmoothingEnabled = false;
-      cctx.drawImage(base, cropRect.x, cropRect.y, cropRect.w, cropRect.h, 0, 0, cropRect.w, cropRect.h);
-
-      const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
+      const blob = await new Promise((res) => fullCanvas.toBlob(res, "image/jpeg", 0.95));
       const form = new FormData();
-      form.append("image", blob, "id_roi.jpg");
+      form.append("image", blob, "id_full.jpg");
 
       const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
@@ -333,20 +268,15 @@ export default function LiveIDVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        try {
-          wsRef.current.close();
-        } catch {}
-      }
+      // Teardown
+      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-        } catch {}
+        try { videoRef.current.pause(); } catch {}
         videoRef.current.srcObject = null;
       }
       navigate("/", { replace: true });
@@ -368,9 +298,7 @@ export default function LiveIDVerification() {
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-        } catch {}
+        try { videoRef.current.pause(); } catch {}
         videoRef.current.srcObject = null;
       }
       startedRef.current = false;
@@ -391,13 +319,12 @@ export default function LiveIDVerification() {
   })();
 
   // Overlay geometry
-  const fw = result?.frame_w,
-    fh = result?.frame_h;
+  const fw = result?.frame_w, fh = result?.frame_h;
   const backendGuide = result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
   const guideRect = backendGuide || localGuideRect();
 
   const idCardBox = result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
-  const faceBox = result?.largest_bbox && fw && fh ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
+  const faceBox = result?.largest_bbox && fw && fh ? mapBoxToScreen(result?.largest_bbox, fw, fh) : null;
 
   const fmt = (v, d = 2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
   const metricsText =
@@ -499,8 +426,12 @@ export default function LiveIDVerification() {
         </>
       )}
 
+      {/* Raise banner a bit to avoid overlap */}
       {cameraOn && guideRect && (
-        <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: Math.max(8, guideRect.y - 16), left: 0, padding: "0 16px" }}>
+        <div
+          className="position-absolute w-100 d-flex justify-content-center"
+          style={{ top: Math.max(8, guideRect.y - 48), left: 0, padding: "0 16px" }}
+        >
           <div
             style={{
               maxWidth: 680,
