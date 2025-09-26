@@ -403,11 +403,11 @@ export default function LiveBackIDVerification() {
   useEffect(() => {
     const allGreen =
       !!result &&
-      result.skipped !== true &&          // NEW: ignore heartbeat payloads
+      result.skipped !== true &&          // ignore heartbeat payloads
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
-      result.face_on_id === true &&
+      // NOTE: back side does NOT require a face_on_id gate
       result.ocr_ok === true;
 
     if (cameraOn && allGreen && !isUploading && !autoCapturedRef.current) {

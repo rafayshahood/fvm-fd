@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://ser-strongly-thing-station.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://nimwdshpk90xbg-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
