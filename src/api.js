@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://lender-validation-telecommunications-dimensional.trycloudflare.com ';
+const RUNPOD_DEFAULT = 'https://lender-validation-telecommunications-dimensional.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
