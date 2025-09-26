@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://hampton-aspects-sandy-legend.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://6xk1f81dfjz1s8-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
