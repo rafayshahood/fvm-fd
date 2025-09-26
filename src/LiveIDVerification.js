@@ -82,69 +82,6 @@ export default function LiveIDVerification() {
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ===== NEW (minimal): freeze-on-verify plumbing =====
-  const sendLoopStopRef = useRef(null);        // stop function returned by startSendingFrames
-  const analyzedSeqRef = useRef(null);         // last analyzed seq echoed by backend
-  const seqRef = useRef(0);                    // incremental seq we attach to each frame
-  const bufRef = useRef(new Map());            // tiny ring buffer: seq -> { b64, w, h }
-  const BUF_MAX = 24;
-
-  function bufferPut(seq, b64, w, h) {
-    const m = bufRef.current;
-    m.set(seq, { b64, w, h });
-    while (m.size > BUF_MAX) {
-      const firstKey = m.keys().next().value;
-      m.delete(firstKey);
-    }
-  }
-  function bufferGet(seq) {
-    return bufRef.current.get(seq) || null;
-  }
-  async function uploadCroppedFromB64(b64, fw, fh, rect) {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = `data:image/jpeg;base64,${b64}`;
-    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
-
-    const full = document.createElement("canvas");
-    full.width = fw; full.height = fh;
-    const fctx = full.getContext("2d", { alpha: false });
-    fctx.imageSmoothingEnabled = false;
-    fctx.drawImage(img, 0, 0, fw, fh);
-
-    let cropCanvas = full;
-    if (Array.isArray(rect) && rect.length === 4) {
-      let [rx, ry, rw, rh] = rect.map(Number);
-      rx = Math.max(0, Math.min(fw - 1, Math.floor(rx)));
-      ry = Math.max(0, Math.min(fh - 1, Math.floor(ry)));
-      rw = Math.max(1, Math.min(fw - rx, Math.round(rw)));
-      rh = Math.max(1, Math.min(fh - ry, Math.round(rh)));
-
-      const cx = document.createElement("canvas");
-      cx.width = rw; cx.height = rh;
-      const cctx = cx.getContext("2d", { alpha: false });
-      cctx.imageSmoothingEnabled = false;
-      cctx.drawImage(full, rx, ry, rw, rh, 0, 0, rw, rh);
-      cropCanvas = cx;
-    }
-
-    const blob = await new Promise((res) => cropCanvas.toBlob(res, "image/jpeg", 0.95));
-    if (!blob) throw new Error("Failed to encode crop");
-
-    const reqId = getReqId();
-    if (!reqId) throw new Error("No request id");
-
-    const form = new FormData();
-    form.append("image", blob, "id_roi.jpg");
-    const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
-      method: "POST",
-      body: form,
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
-  }
-  // ===== end NEW plumbing =====
-
   // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
@@ -297,17 +234,11 @@ export default function LiveIDVerification() {
       ws.onerror = () => setStatus("WS error");
       ws.onmessage = (evt) => {
         try {
-          const data = JSON.parse(evt.data);
-          setResult(data);
-          if (typeof data?.analyzed_seq === "number") {
-            analyzedSeqRef.current = data.analyzed_seq;
-          }
+          setResult(JSON.parse(evt.data));
         } catch {}
       };
       wsRef.current = ws;
-
-      // IMPORTANT: capture the stop function so we can stop sending immediately on lock
-      sendLoopStopRef.current = startSendingFrames();
+      startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
@@ -316,7 +247,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // send loop (MINIMAL CHANGE: send JSON {seq,img} and buffer each frame)
+  // send loop
   function startSendingFrames() {
     let stop = false;
     let sending = false;
@@ -372,11 +303,8 @@ export default function LiveIDVerification() {
         ctx.drawImage(v, 0, 0, W, H);
         const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
         if (b64) {
-          const seq = ++seqRef.current;
-          bufferPut(seq, b64, W, H);
           try {
-            // NEW: send JSON envelope so backend can echo analyzed_seq
-            ws.send(JSON.stringify({ seq, img: b64 }));
+            ws.send(b64);
             lastSentAt = now;
           } catch {}
         }
@@ -392,11 +320,10 @@ export default function LiveIDVerification() {
     };
   }
 
-  // AUTO-CAPTURE when all gates pass (unchanged trigger)
+  // AUTO-CAPTURE when all gates pass (unchanged)
   useEffect(() => {
     const allGreen =
       !!result &&
-      result.skipped !== true &&          // NEW: ignore heartbeat payloads
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
@@ -413,40 +340,8 @@ export default function LiveIDVerification() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
-
-      // NEW: stop sending more frames immediately to "freeze" the analyzed scene
-      try { sendLoopStopRef.current?.(); } catch {}
-      sendLoopStopRef.current = null;
-
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
-
-      // Prefer exact analyzed frame via buffer (if backend echoed analyzed_seq)
-      const analyzedSeq = typeof analyzedSeqRef.current === "number" ? analyzedSeqRef.current : null;
-      const analyzedEntry = analyzedSeq ? bufferGet(analyzedSeq) : null;
-
-      if (analyzedEntry && Array.isArray(result?.rect)) {
-        // Upload crop from exact analyzed frame
-        await uploadCroppedFromB64(analyzedEntry.b64, analyzedEntry.w, analyzedEntry.h, result.rect);
-
-        // cleanup (keep identical behavior after successful upload)
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          try { wsRef.current.close(); } catch {}
-        }
-        wsRef.current = null;
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
-        if (videoRef.current) {
-          try { videoRef.current.pause(); } catch {}
-          videoRef.current.srcObject = null;
-        }
-        navigate("/", { replace: true });
-        return;
-      }
-
-      // ===== ORIGINAL PATH (unchanged): capture from live <video> using screen→video mapping =====
       const v = videoRef.current;
 
       const fw = result?.frame_w,
@@ -516,7 +411,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // screen→video mapping for capture (unchanged)
+  // screen→video mapping for capture
   function mapScreenRectToVideoRect(sx, sy, sw, sh) {
     const v = videoRef.current;
     if (!v) return null;
@@ -549,8 +444,6 @@ export default function LiveIDVerification() {
       startedRef.current = false;
       autoCapturedRef.current = false;
       setCameraOn(false);
-      try { sendLoopStopRef.current?.(); } catch {}
-      sendLoopStopRef.current = null;
     };
   }, []);
 
