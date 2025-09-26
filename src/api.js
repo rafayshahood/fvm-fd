@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://verified-limousines-lobby-hopkins.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://med-alphabetical-pipeline-various.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
