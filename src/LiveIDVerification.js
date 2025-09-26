@@ -396,6 +396,7 @@ export default function LiveIDVerification() {
   useEffect(() => {
     const allGreen =
       !!result &&
+      result.skipped !== true &&          // NEW: ignore heartbeat payloads
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
