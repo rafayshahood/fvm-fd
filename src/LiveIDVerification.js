@@ -1,6 +1,7 @@
 // LiveIDVerification.jsx — viewport-sized streaming & capture
-// Now uses the SAME pacing as LiveVerification (SEND_FRAME_INTERVAL_MS, SEND_EVERY_NTH_FRAME)
-// and removes the WebSocket bufferedAmount throttle.
+// Now uses the SAME camera constraint style as the selfie page:
+//   { video: { facingMode: { ideal: "environment" } }, audio: false }
+// so the displayed dimensions match LiveVerification.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -44,8 +45,6 @@ export default function LiveIDVerification() {
   const wsRef = useRef(null);
   const startedRef = useRef(false);
   const autoCapturedRef = useRef(false);
-
-  const sendTickRef = useRef(0);
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
@@ -204,40 +203,75 @@ export default function LiveIDVerification() {
     }
   }
 
-  // --- MATCH LiveVerification pacing exactly ---
-  const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 5; // send every 5th iteration
-
+  // viewport-sized streaming (matches what the user sees)
   function startSendingFrames() {
     let stop = false;
+    let sending = false;
+    let lastSentAt = 0;
+    let frameCounter = 0;
+    const TARGET_FPS = 30;
+    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS);
+    const MAX_BUFFERED = 256 * 1024;
+    const MAX_SIDE = 960;
+
     const loop = () => {
       if (stop) return;
-      const v = videoRef.current, ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
+      const v = videoRef.current,
+        ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN) {
         requestAnimationFrame(loop);
         return;
       }
 
-      // Draw full sensor (no display scaling)
-      const canvas = document.createElement("canvas");
-      canvas.width = v.videoWidth;
-      canvas.height = v.videoHeight;
-      const ctx = canvas.getContext("2d", { alpha: false });
-      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-
-      // Same cadence as video page
-      sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
-      if (sendTickRef.current === 0) {
-        const b64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
-        if (b64) {
-          try { ws.send(b64); } catch {}
-        }
+      const now = performance.now();
+      frameCounter += 1;
+      const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
+      const ratioOk = frameCounter % 5 === 0;
+      if (!timeOk && !ratioOk) {
+        requestAnimationFrame(loop);
+        return;
+      }
+      if (sending || ws.bufferedAmount > MAX_BUFFERED || !(v.videoWidth && v.videoHeight)) {
+        requestAnimationFrame(loop);
+        return;
       }
 
-      setTimeout(() => requestAnimationFrame(loop), SEND_FRAME_INTERVAL_MS);
+      const geo = currentDisplayRect();
+      if (!geo || !geo.dispW || !geo.dispH) {
+        requestAnimationFrame(loop);
+        return;
+      }
+
+      sending = true;
+      try {
+        const scale = Math.min(1, MAX_SIDE / Math.max(geo.dispW, geo.dispH));
+        const FW = Math.max(2, Math.round(geo.dispW * scale));
+        const FH = Math.max(2, Math.round(geo.dispH * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = FW;
+        canvas.height = FH;
+        const ctx = canvas.getContext("2d", { alpha: false });
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(v, 0, 0, FW, FH);
+
+        const b64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
+        if (b64) {
+          try {
+            ws.send(b64);
+            lastSentAt = now;
+          } catch {}
+        }
+      } finally {
+        sending = false;
+        setTimeout(() => requestAnimationFrame(loop), 16);
+      }
     };
+
     requestAnimationFrame(loop);
-    return () => { stop = true; };
+    return () => {
+      stop = true;
+    };
   }
 
   // AUTO-CAPTURE when all gates pass
@@ -266,8 +300,6 @@ export default function LiveIDVerification() {
 
       const geo = currentDisplayRect();
       if (!geo) throw new Error("Camera not ready");
-
-      // Use displayed geometry to crop exactly what the user sees
       const FW = Math.round(geo.dispW);
       const FH = Math.round(geo.dispH);
 
@@ -280,9 +312,7 @@ export default function LiveIDVerification() {
 
       const guideOnScreen = guideRect;
       if (!guideOnScreen) throw new Error("Guide not ready");
-      const cropRect = mapScreenRectToFrameRect(
-        guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h, FW, FH
-      );
+      const cropRect = mapScreenRectToFrameRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h, FW, FH);
       if (!cropRect || !(cropRect.w > 0 && cropRect.h > 0)) throw new Error("Crop failed");
 
       const crop = document.createElement("canvas");
@@ -304,7 +334,9 @@ export default function LiveIDVerification() {
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        try { wsRef.current.close(); } catch {}
+        try {
+          wsRef.current.close();
+        } catch {}
       }
       wsRef.current = null;
       if (streamRef.current) {
@@ -312,7 +344,9 @@ export default function LiveIDVerification() {
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try { videoRef.current.pause(); } catch {}
+        try {
+          videoRef.current.pause();
+        } catch {}
         videoRef.current.srcObject = null;
       }
       navigate("/", { replace: true });
@@ -334,7 +368,9 @@ export default function LiveIDVerification() {
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try { videoRef.current.pause(); } catch {}
+        try {
+          videoRef.current.pause();
+        } catch {}
         videoRef.current.srcObject = null;
       }
       startedRef.current = false;
@@ -463,12 +499,8 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Raise banner a bit more above the rectangle to avoid overlap */}
       {cameraOn && guideRect && (
-        <div
-          className="position-absolute w-100 d-flex justify-content-center"
-          style={{ top: Math.max(8, guideRect.y - 48), left: 0, padding: "0 16px" }}
-        >
+        <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: Math.max(8, guideRect.y - 16), left: 0, padding: "0 16px" }}>
           <div
             style={{
               maxWidth: 680,
