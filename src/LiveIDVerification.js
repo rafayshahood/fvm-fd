@@ -1,4 +1,5 @@
 // LiveIDVerification.jsx — ID flow with immediate hard-stop on capture (no heartbeat dependency)
+// (Updated to RENDER the guidance banner.)
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -524,6 +525,35 @@ export default function LiveIDVerification() {
             </div>
           )}
         </>
+      )}
+
+      {/* NEW: Guidance banner (always visible while camera is on; anchors above guide if present) */}
+      {cameraOn && (
+        <div
+          className="position-absolute w-100 d-flex justify-content-center"
+          style={{
+            top: Math.max(12, (guideRect?.y ?? 24) - 16),
+            left: 0,
+            padding: "0 16px",
+            zIndex: 10,
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 680,
+              width: "100%",
+              textAlign: "center",
+              background: "rgba(0,0,0,0.6)",
+              color: "#fff",
+              borderRadius: 12,
+              padding: "10px 14px",
+              fontSize: 16,
+              backdropFilter: "blur(4px)",
+            }}
+          >
+            {guidance}
+          </div>
+        </div>
       )}
 
       {!cameraOn && !isUploading && (
