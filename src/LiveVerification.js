@@ -223,7 +223,7 @@ function LiveVerification() {
   const RECORD_TARGET_MS = 8000;
   const SEND_FRAME_INTERVAL_MS = 80;
   const SEND_EVERY_NTH_FRAME = 5; // 5fps regardless of camera FPS
-  const TIMEOUT_TOTAL_MS = 30000;
+  const TIMEOUT_TOTAL_MS = 300000;
 
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
