@@ -1,7 +1,7 @@
 // LiveIDVerification.jsx — viewport-sized streaming & capture
-// - Frames sent to /ws-id-live match the visible video box (no huge sensor frames)
-// - Auto-capture uploads a still cropped from the same viewport geometry
-// - Guide rectangle appears immediately (local placeholder) and syncs when backend rect arrives
+// Now uses the SAME camera constraint style as the selfie page:
+//   { video: { facingMode: { ideal: "environment" } }, audio: false }
+// so the displayed dimensions match LiveVerification.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -70,12 +70,11 @@ export default function LiveIDVerification() {
     };
   }, []);
 
-  // Displayed-video layout (object-fit: contain)
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
-    const dispW = vidW * scale;
-    const dispH = vidH * scale;
+    const dispW = vidW * scale,
+      dispH = vidH * scale;
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
@@ -89,7 +88,7 @@ export default function LiveIDVerification() {
     return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  // ---- Mapping helpers (backend frame coords → screen coords) ----
+  // BACKEND-normalized mapping
   function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current;
     if (!v || !b || b.length !== 4) return null;
@@ -120,7 +119,6 @@ export default function LiveIDVerification() {
     };
   }
 
-  // Map screen rect → the *frame we actually send to backend* (viewport-sized)
   function mapScreenRectToFrameRect(sx, sy, sw, sh, frameW, frameH) {
     const geo = currentDisplayRect();
     if (!geo) return null;
@@ -148,35 +146,12 @@ export default function LiveIDVerification() {
     return { x: rectX, y: rectY, w: rectW, h: rectH };
   }
 
+  // ✅ Same style as LiveVerification: no explicit width/height forcing
   async function getBestStream() {
-    const trials = [
-      {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      },
-      {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      },
-      { video: { facingMode: { ideal: "environment" } }, audio: false },
-    ];
-    let err = null;
-    for (const c of trials) {
-      try {
-        return await navigator.mediaDevices.getUserMedia(c);
-      } catch (e) {
-        err = e;
-      }
-    }
-    throw err || new Error("Camera unavailable");
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
   }
 
   async function startCamera() {
@@ -193,7 +168,6 @@ export default function LiveIDVerification() {
       v.muted = true;
       v.setAttribute("playsInline", "true");
 
-      // Prefer continuous AF/AE if supported
       try {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
@@ -220,8 +194,7 @@ export default function LiveIDVerification() {
         } catch {}
       };
       wsRef.current = ws;
-
-      startSendingFrames(); // begin viewport-sized streaming
+      startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
@@ -230,7 +203,7 @@ export default function LiveIDVerification() {
     }
   }
 
-  // Viewport-sized send loop (what you SEE is what we SEND)
+  // viewport-sized streaming (matches what the user sees)
   function startSendingFrames() {
     let stop = false;
     let sending = false;
@@ -239,7 +212,7 @@ export default function LiveIDVerification() {
     const TARGET_FPS = 30;
     const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS);
     const MAX_BUFFERED = 256 * 1024;
-    const MAX_SIDE = 960; // cap network size but preserve aspect
+    const MAX_SIDE = 960;
 
     const loop = () => {
       if (stop) return;
@@ -253,12 +226,11 @@ export default function LiveIDVerification() {
       const now = performance.now();
       frameCounter += 1;
       const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
-      const ratioOk = frameCounter % 5 === 0; // throttle like before
+      const ratioOk = frameCounter % 5 === 0;
       if (!timeOk && !ratioOk) {
         requestAnimationFrame(loop);
         return;
       }
-
       if (sending || ws.bufferedAmount > MAX_BUFFERED || !(v.videoWidth && v.videoHeight)) {
         requestAnimationFrame(loop);
         return;
@@ -272,7 +244,6 @@ export default function LiveIDVerification() {
 
       sending = true;
       try {
-        // Canvas matches the displayed video box, scaled down to MAX_SIDE if needed
         const scale = Math.min(1, MAX_SIDE / Math.max(geo.dispW, geo.dispH));
         const FW = Math.max(2, Math.round(geo.dispW * scale));
         const FH = Math.max(2, Math.round(geo.dispH * scale));
@@ -282,8 +253,6 @@ export default function LiveIDVerification() {
         canvas.height = FH;
         const ctx = canvas.getContext("2d", { alpha: false });
         ctx.imageSmoothingEnabled = false;
-
-        // Draw full video into the viewport-sized canvas (same composition as screen)
         ctx.drawImage(v, 0, 0, FW, FH);
 
         const b64 = canvas.toDataURL("image/jpeg", 0.75).split(",")[1];
@@ -329,13 +298,11 @@ export default function LiveIDVerification() {
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
 
-      // We crop from the same viewport-sized frame we stream (no giant sensor still)
       const geo = currentDisplayRect();
       if (!geo) throw new Error("Camera not ready");
       const FW = Math.round(geo.dispW);
       const FH = Math.round(geo.dispH);
 
-      // Draw base viewport-sized frame
       const base = document.createElement("canvas");
       base.width = FW;
       base.height = FH;
@@ -343,13 +310,11 @@ export default function LiveIDVerification() {
       bctx.imageSmoothingEnabled = false;
       bctx.drawImage(v, 0, 0, FW, FH);
 
-      // Determine guide rect on screen, then map to this frame space
       const guideOnScreen = guideRect;
       if (!guideOnScreen) throw new Error("Guide not ready");
       const cropRect = mapScreenRectToFrameRect(guideOnScreen.x, guideOnScreen.y, guideOnScreen.w, guideOnScreen.h, FW, FH);
       if (!cropRect || !(cropRect.w > 0 && cropRect.h > 0)) throw new Error("Crop failed");
 
-      // Crop and upload
       const crop = document.createElement("canvas");
       crop.width = cropRect.w;
       crop.height = cropRect.h;
@@ -368,7 +333,6 @@ export default function LiveIDVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // cleanup
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         try {
           wsRef.current.close();
@@ -389,7 +353,7 @@ export default function LiveIDVerification() {
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
-      autoCapturedRef.current = false; // allow retry
+      autoCapturedRef.current = false;
     } finally {
       setIsUploading(false);
     }
@@ -415,7 +379,6 @@ export default function LiveIDVerification() {
     };
   }, []);
 
-  // --- Guidance (only new checks) ---
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result) return "Connecting…";
@@ -436,7 +399,6 @@ export default function LiveIDVerification() {
   const idCardBox = result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
   const faceBox = result?.largest_bbox && fw && fh ? mapBoxToScreen(result.largest_bbox, fw, fh) : null;
 
-  // OCR metrics (debug line)
   const fmt = (v, d = 2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
   const metricsText =
     result && idCardBox
@@ -470,9 +432,7 @@ export default function LiveIDVerification() {
                 <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h} rx="12" ry="12" fill="black" />
               </mask>
             </defs>
-            {/* dim outside guide */}
             <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
-            {/* guide outline */}
             <rect
               x={guideRect.x}
               y={guideRect.y}
@@ -485,7 +445,6 @@ export default function LiveIDVerification() {
               strokeWidth="3"
               strokeDasharray="6 6"
             />
-            {/* ID bbox */}
             {idCardBox && (
               <rect
                 x={idCardBox.x}
@@ -497,13 +456,9 @@ export default function LiveIDVerification() {
                 strokeWidth="3"
               />
             )}
-            {/* face on ID */}
-            {faceBox && (
-              <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h} fill="none" stroke="#ff8c00" strokeWidth="3" />
-            )}
+            {faceBox && <rect x={faceBox.x} y={faceBox.y} width={faceBox.w} height={faceBox.h} fill="none" stroke="#ff8c00" strokeWidth="3" />}
           </svg>
 
-          {/* OCR metrics panel */}
           {metricsText && idCardBox && (
             <div
               style={{
@@ -523,7 +478,6 @@ export default function LiveIDVerification() {
             </div>
           )}
 
-          {/* Verified badge */}
           {result?.verified && idCardBox && (
             <div
               style={{
@@ -545,7 +499,6 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Guidance banner */}
       {cameraOn && guideRect && (
         <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: Math.max(8, guideRect.y - 16), left: 0, padding: "0 16px" }}>
           <div
@@ -561,12 +514,19 @@ export default function LiveIDVerification() {
               backdropFilter: "blur(4px)",
             }}
           >
-            {guidance}
+            {(() => {
+              if (!result) return "Connecting…";
+              if (!result.id_card_detected) return "📇 Place the ID card in view.";
+              if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
+              if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
+              if (!result.face_on_id) return "👤 Make sure the ID portrait is visible.";
+              if (!result.ocr_ok) return "🔎 Hold steady—text unclear.";
+              return "✅ Perfect. Capturing…";
+            })()}
           </div>
         </div>
       )}
 
-      {/* Start Camera button — visible until camera is on */}
       {!cameraOn && (
         <div className="position-absolute w-100 d-flex justify-content-center" style={{ bottom: 32, left: 0 }}>
           <button className="btn btn-primary" onClick={startCamera}>
@@ -575,7 +535,6 @@ export default function LiveIDVerification() {
         </div>
       )}
 
-      {/* Bottom status (visible only when camera is on) */}
       {cameraOn && (
         <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
           <div className="text-light text-center" style={{ background: "rgba(0,0,0,0.35)", borderRadius: 12, padding: "6px 10px", fontSize: 12 }}>
