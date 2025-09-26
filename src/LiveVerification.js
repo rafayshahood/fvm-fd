@@ -56,6 +56,7 @@ function RecordingIndicator({ progress }) {
       pointerEvents: 'none',
       zIndex: 100
     }}>
+      {/* Circular progress ring */}
       <svg width="120" height="120" style={{ transform: 'rotate(-90deg)' }}>
         <circle
           cx="60"
@@ -75,9 +76,13 @@ function RecordingIndicator({ progress }) {
           strokeDasharray={`${2 * Math.PI * 54}`}
           strokeDashoffset={`${2 * Math.PI * 54 * (1 - progress / 100)}`}
           strokeLinecap="round"
-          style={{ transition: 'stroke-dashoffset 0.3s ease' }}
+          style={{
+            transition: 'stroke-dashoffset 0.3s ease',
+          }}
         />
       </svg>
+      
+      {/* Pulsing red dot in center */}
       <div style={{
         position: 'absolute',
         top: '50%',
@@ -96,6 +101,8 @@ function RecordingIndicator({ progress }) {
           }
         `}</style>
       </div>
+      
+      {/* "REC" text */}
       <div style={{
         position: 'absolute',
         top: '100%',
@@ -116,6 +123,7 @@ function RecordingIndicator({ progress }) {
 // ANIMATION OPTION 2: Corner Recording Badge with Waveform
 function RecordingBadge({ progress }) {
   const remainingSeconds = Math.ceil((8000 - progress * 80) / 1000);
+  
   return (
     <div style={{
       position: 'absolute',
@@ -131,26 +139,48 @@ function RecordingBadge({ progress }) {
       boxShadow: '0 4px 20px rgba(255,68,68,0.4)',
       zIndex: 101
     }}>
+      {/* Animated dot */}
       <div style={{
-        width: 12, height: 12, borderRadius: '50%', background: '#fff',
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        background: '#fff',
         animation: 'blink 1s ease-in-out infinite'
       }}>
         <style>{`
-          @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+          @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+          }
         `}</style>
       </div>
+      
+      {/* Waveform bars */}
       <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-        {[1,2,3,4,5].map(i => (
-          <div key={i} style={{
-            width: 3, height: 16, background: '#fff', borderRadius: 2,
-            animation: `wave 1.2s ease-in-out infinite`, animationDelay: `${i*0.1}s`
-          }}/>
+        {[1, 2, 3, 4, 5].map((i) => (
+          <div
+            key={i}
+            style={{
+              width: 3,
+              height: 16,
+              background: '#fff',
+              borderRadius: 2,
+              animation: `wave ${1.2}s ease-in-out infinite`,
+              animationDelay: `${i * 0.1}s`
+            }}
+          />
         ))}
         <style>{`
-          @keyframes wave { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1); } }
+          @keyframes wave {
+            0%, 100% { transform: scaleY(0.5); }
+            50% { transform: scaleY(1); }
+          }
         `}</style>
       </div>
-      <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>{remainingSeconds}s</span>
+      
+      <span style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
+        {remainingSeconds}s
+      </span>
     </div>
   );
 }
@@ -181,11 +211,11 @@ function LiveVerification() {
 
   const sendTickRef = useRef(0);
 
-  // Session timeout & countdown
+  // Session timeout & countdown (start ONLY when analyzer is ready)
   const timeoutIdRef = useRef(null);
   const countdownIdRef = useRef(null);
   const sessionEndAtRef = useRef(null);
-  const analyzerReadyRef = useRef(false);
+  const analyzerReadyRef = useRef(false); // NEW: flips on first analyzer payload
   const [remainingMs, setRemainingMs] = useState(null);
 
   // Tunables
@@ -221,6 +251,7 @@ function LiveVerification() {
     };
   }, []);
 
+  // Contain layout: show full sensor without cropping
   function containLayout(containerW, containerH, vidW, vidH) {
     if (!vidW || !vidH) return { scale: 1, dx: 0, dy: 0, dispW: 0, dispH: 0 };
     const scale = Math.min(containerW / vidW, containerH / vidH);
@@ -229,6 +260,7 @@ function LiveVerification() {
     return { scale, dx: (containerW - dispW) / 2, dy: (containerH - dispH) / 2, dispW, dispH };
   }
 
+  // Ellipse defined inside the displayed video (mapped to video coords for backend)
   function currentDisplayEllipse() {
     const v = videoRef.current; if (!v) return null;
     const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
@@ -240,6 +272,7 @@ function LiveVerification() {
     const ellipseCxDisp = dx + dispW / 2;
     const ellipseCyDisp = dy + dispH / 2;
 
+    // Map displayed ellipse → video pixel coords for backend
     const ellipseRxVid = ellipseRxDisp / scale;
     const ellipseRyVid = ellipseRyDisp / scale;
     const ellipseCxVid = (ellipseCxDisp - dx) / scale;
@@ -251,6 +284,7 @@ function LiveVerification() {
     };
   }
 
+  // Offscreen canvas drawing for recording upright pixels
   function startRecCanvasDraw() {
     const v = videoRef.current;
     if (!v) return;
@@ -317,13 +351,9 @@ function LiveVerification() {
     analyzerReadyRef.current = false;
   }
 
-  // If timeout fires but we're recording/uploading, ignore it.
   function handleTimeout() {
-    if (recRef.current || uploadingRef.current || hasUploadedRef.current || isProcessing) {
-      return; // ← do nothing while recording or uploading
-    }
     cleanup();
-    setIsProcessing(false);
+    setIsProcessing(false); // ensure overlay is gone on timeout
     navigate("/", { replace: true });
     setTimeout(() => {
       if (window.location.pathname !== "/") window.location.assign("/");
@@ -331,8 +361,7 @@ function LiveVerification() {
   }
 
   function startCountdownAndTimeout() {
-    // Don't start session timer if we're already recording or uploading
-    if (recRef.current || uploadingRef.current || hasUploadedRef.current || isProcessing) return;
+    // Start the 30s window only when analyzer is ready (first payload)
     sessionEndAtRef.current = performance.now() + TIMEOUT_TOTAL_MS;
     setRemainingMs(TIMEOUT_TOTAL_MS);
     countdownIdRef.current = setInterval(() => {
@@ -343,7 +372,7 @@ function LiveVerification() {
   }
 
   async function startCamera() {
-    if (startedRef.current || isProcessing) return;
+    if (startedRef.current || isProcessing) return; // block while processing
     startedRef.current = true;
     setStatus("Requesting camera…");
 
@@ -372,6 +401,7 @@ function LiveVerification() {
       const ws = new WebSocket(`${WS_BASE}/ws-live-verification`);
       ws.onopen = () => {
         setStatus((s) => s + " | WS connected");
+        // Send ellipse immediately
         const e = currentDisplayEllipse();
         if (e) {
           const { cx, cy, rx, ry } = e.vid;
@@ -386,7 +416,7 @@ function LiveVerification() {
           const data = JSON.parse(evt.data);
           setResult(data);
 
-          // Start 30s session only after first payload AND only if not recording/uploading
+          // FIRST analyzer payload → start the 30s session now
           if (!analyzerReadyRef.current) {
             analyzerReadyRef.current = true;
             startCountdownAndTimeout();
@@ -413,7 +443,7 @@ function LiveVerification() {
             const isRecording = !!recRef.current;
 
             if (!isRecording && stableFor >= STABLE_REQUIRED_MS) {
-              startRecording();        // ← clears timers so 30s window stops here
+              startRecording();
             }
             if (isRecording && recordingStartRef.current) {
               const recElapsed = now - recordingStartRef.current;
@@ -437,6 +467,7 @@ function LiveVerification() {
       };
       wsRef.current = ws;
 
+      // Resend ellipse on resize (keeps backend in sync)
       const resendOnResize = () => {
         const e = currentDisplayEllipse();
         const ws2 = wsRef.current;
@@ -448,12 +479,15 @@ function LiveVerification() {
       window.addEventListener("resize", resendOnResize);
       window.addEventListener("orientationchange", resendOnResize);
 
+      // Start streaming frames (5 fps)
       startSendingFrames();
 
+      // Clean window listeners on unmount
       const clean = () => {
         window.removeEventListener("resize", resendOnResize);
         window.removeEventListener("orientationchange", resendOnResize);
       };
+      // ensure removal on unmount
       setTimeout(() => {
         if (!startedRef.current) clean();
       }, 0);
@@ -505,9 +539,6 @@ function LiveVerification() {
   function startRecording() {
     if (recRef.current || !streamRef.current || uploadingRef.current || hasUploadedRef.current || isProcessing) return;
 
-    // *** STOP the 30s session immediately once recording starts ***
-    clearTimers();
-
     startRecCanvasDraw();
 
     const canvas = recCanvasRef.current;
@@ -539,7 +570,8 @@ function LiveVerification() {
       hasUploadedRef.current = true;
 
       setIsProcessing(true);
-      await uploadSingle(blob); // ← allow as long as needed
+      await uploadSingle(blob);
+      // overlay remains until navigation
       uploadingRef.current = false;
       recordingStartRef.current = null;
     };
@@ -568,9 +600,6 @@ function LiveVerification() {
 
   async function uploadSingle(blob) {
     try {
-      // *** Ensure session timer stays OFF for the entire upload ***
-      clearTimers();
-
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
 
@@ -585,15 +614,17 @@ function LiveVerification() {
       if (!res.ok) throw new Error("Upload failed");
       await res.json();
 
-      // 2) Wait until backend confirms the video exists (no hard deadline now)
-      //    Poll indefinitely (user sees blocking overlay). You can add a cancel if needed.
+      // 2) Stay on this page with the blocking overlay UNTIL backend state flips
+      //    to video_verified === true, so Home shows "Video Verified" immediately.
+      const deadline = Date.now() + 20000; // wait up to 20s (usually far less)
       // eslint-disable-next-line no-constant-condition
       while (true) {
         const stRes = await fetch(`${API_BASE}/req/state/${reqId}`, { cache: "no-store" });
         const st = await stRes.json();
         const ready = !!st?.state?.video_verified;
         if (ready) break;
-        await new Promise((r) => setTimeout(r, 700));
+        if (Date.now() > deadline) break; // fail-safe: don't trap the user forever
+        await new Promise((r) => setTimeout(r, 500));
       }
 
       // 3) Now teardown and go Home
@@ -632,9 +663,10 @@ function LiveVerification() {
 
   const remainingSec = remainingMs != null ? Math.ceil(remainingMs / 1000) : null;
 
-  const dispEllipse = currentDisplayEllipse();
+  const dispEllipse = currentDisplayEllipse(); // for drawing only
   const bannerTop = Math.max(16, (dispEllipse ? dispEllipse.disp.cy - dispEllipse.disp.ry : 0) - 60);
 
+  // Calculate recording progress for animations
   const recordingProgress = recRef.current && recordingStartRef.current
     ? Math.min(100, ((performance.now() - recordingStartRef.current) / RECORD_TARGET_MS) * 100)
     : 0;
@@ -646,7 +678,10 @@ function LiveVerification() {
         autoPlay
         muted
         playsInline
-        style={{ position:"absolute", inset:0, width:"100%", height:"100%", objectFit:"contain" }}
+        style={{
+          position:"absolute", inset:0, width:"100%", height:"100%",
+          objectFit:"contain"
+        }}
       />
 
       {dispEllipse && (
@@ -677,8 +712,15 @@ function LiveVerification() {
         </svg>
       )}
 
-      {recRef.current && <RecordingIndicator progress={Math.floor(recordingProgress)} />}
-      {recRef.current && <RecordingBadge progress={recordingProgress} />}
+      {/* ANIMATION OPTION 1: Pulsing Recording Indicator with Circular Progress Ring */}
+      {recRef.current && (
+        <RecordingIndicator progress={Math.floor(recordingProgress)} />
+      )}
+
+      {/* ANIMATION OPTION 2: Corner Recording Badge with Waveform */}
+      {recRef.current && (
+        <RecordingBadge progress={recordingProgress} />
+      )}
 
       <div className="position-absolute w-100 d-flex justify-content-center" style={{ top: bannerTop, left: 0, padding: "0 16px" }}>
         <div style={{ maxWidth: 680, width: "100%", textAlign: "center", background: "rgba(0,0,0,0.6)", color: "#fff",
@@ -687,8 +729,7 @@ function LiveVerification() {
         </div>
       </div>
 
-      {/* Hide session countdown while recording or uploading */}
-      {(remainingSec != null && !recRef.current && !uploadingRef.current && !hasUploadedRef.current && !isProcessing) && (
+      {remainingSec != null && (
         <div className="position-absolute" style={{ top: 16, right: 16 }}>
           <div style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 14 }}>
             Session ends in <strong>{remainingSec}s</strong>
@@ -708,6 +749,7 @@ function LiveVerification() {
         </div>
       </div>
 
+      {/* Block all interaction while uploading/processing */}
       {isProcessing && <BlockingOverlay text="Uploading your selfie video… Please wait." />}
     </div>
   );
