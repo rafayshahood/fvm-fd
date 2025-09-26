@@ -1,6 +1,7 @@
 // LiveIDVerification.jsx — viewport-sized streaming & capture
 // Matches LiveVerification pacing; WS frames are full-sensor;
 // final upload is the FULL frame (no ROI crop).
+// Now includes BRIGHTNESS gate as the first check.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -226,6 +227,7 @@ export default function LiveIDVerification() {
   useEffect(() => {
     const allGreen =
       !!result &&
+      result.brightness_ok === true &&                  // ⬅️ new: brightness first
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
@@ -310,6 +312,14 @@ export default function LiveIDVerification() {
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result) return "Connecting…";
+
+    // ⬇️ brightness first
+    if (result.brightness_ok === false) {
+      if (result.brightness_status === "dark") return "💡 Increase lighting on the ID.";
+      if (result.brightness_status === "bright") return "✨ Reduce glare or move away from direct light.";
+      return "💡 Adjust lighting.";
+    }
+
     if (!result.id_card_detected) return "📇 Place the ID card in view.";
     if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
     if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
@@ -445,15 +455,7 @@ export default function LiveIDVerification() {
               backdropFilter: "blur(4px)",
             }}
           >
-            {(() => {
-              if (!result) return "Connecting…";
-              if (!result.id_card_detected) return "📇 Place the ID card in view.";
-              if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
-              if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
-              if (!result.face_on_id) return "👤 Make sure the ID portrait is visible.";
-              if (!result.ocr_ok) return "🔎 Hold steady—text unclear.";
-              return "✅ Perfect. Capturing…";
-            })()}
+            {guidance}
           </div>
         </div>
       )}
