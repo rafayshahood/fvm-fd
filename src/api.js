@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://celebrity-held-yarn-blowing.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://lenses-next-upload-particles.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
