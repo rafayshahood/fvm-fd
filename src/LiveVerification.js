@@ -572,6 +572,12 @@ function LiveVerification() {
       // Clear the countdown timer since recording is complete and upload is starting
       clearTimers();
       
+      // Stop all detection and frame analysis since recording is complete
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        try { wsRef.current.close(); } catch {}
+      }
+      wsRef.current = null;
+      
       setIsProcessing(true);
       await uploadSingle(blob);
       // overlay remains until navigation

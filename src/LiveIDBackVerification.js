@@ -1,9 +1,6 @@
-// livebackidverifiaction.js (LiveBackIDVerification.jsx)
-// Same UX as the front-side flow, but:
-// - Uses /ws-id-back-live
-// - Auto-captures when (id_detected && overlap && size && ocr_ok)
-// - Uploads to /upload-id-back-still
-// - No face-on-ID requirement or overlay
+// LiveIDBackVerification.jsx — viewport-sized streaming & capture (BACK side)
+// WS frames are full-sensor; final upload is the FULL frame (no ROI crop).
+// Brightness gate first. No face checks on the back side.
 
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -29,49 +26,17 @@ function BlockingOverlay({ text = "Processing… Please wait." }) {
       }}
     >
       <svg width="56" height="56" viewBox="0 0 50 50" aria-hidden="true">
-        <circle
-          cx="25"
-          cy="25"
-          r="20"
-          fill="none"
-          stroke="white"
-          strokeWidth="5"
-          strokeLinecap="round"
-          opacity="0.25"
-        />
-        <path
-          fill="none"
-          stroke="white"
-          strokeWidth="5"
-          strokeLinecap="round"
-          d="M25 5 a20 20 0 0 1 0 40"
-        >
-          <animateTransform
-            attributeName="transform"
-            type="rotate"
-            from="0 25 25"
-            to="360 25 25"
-            dur="0.9s"
-            repeatCount="indefinite"
-          />
+        <circle cx="25" cy="25" r="20" fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" opacity="0.25" />
+        <path fill="none" stroke="white" strokeWidth="5" strokeLinecap="round" d="M25 5 a20 20 0 0 1 0 40">
+          <animateTransform attributeName="transform" type="rotate" from="0 25 25" to="360 25 25" dur="0.9s" repeatCount="indefinite" />
         </path>
       </svg>
-      <div
-        style={{
-          marginTop: 14,
-          color: "#fff",
-          fontSize: 16,
-          textAlign: "center",
-          padding: "6px 10px",
-        }}
-      >
-        {text}
-      </div>
+      <div style={{ marginTop: 14, color: "#fff", fontSize: 16, textAlign: "center", padding: "6px 10px" }}>{text}</div>
     </div>
   );
 }
 
-export default function LiveBackIDVerification() {
+export default function LiveIDBackVerification() {
   const navigate = useNavigate();
 
   const videoRef = useRef(null);
@@ -80,86 +45,17 @@ export default function LiveBackIDVerification() {
   const startedRef = useRef(false);
   const autoCapturedRef = useRef(false);
 
+  const sendTickRef = useRef(0);
+
   const [status, setStatus] = useState("Idle");
   const [result, setResult] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ===== Freeze-on-verify plumbing (same as front) =====
-  const sendLoopStopRef = useRef(null);
-  const analyzedSeqRef = useRef(null);
-  const seqRef = useRef(0);
-  const bufRef = useRef(new Map());
-  const BUF_MAX = 24;
-
-  function bufferPut(seq, b64, w, h) {
-    const m = bufRef.current;
-    m.set(seq, { b64, w, h });
-    while (m.size > BUF_MAX) {
-      const firstKey = m.keys().next().value;
-      m.delete(firstKey);
-    }
-  }
-  function bufferGet(seq) {
-    return bufRef.current.get(seq) || null;
-  }
-
-  async function uploadBackCroppedFromB64(b64, fw, fh, rect) {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.src = `data:image/jpeg;base64,${b64}`;
-    await new Promise((res, rej) => {
-      img.onload = res;
-      img.onerror = rej;
-    });
-
-    const full = document.createElement("canvas");
-    full.width = fw;
-    full.height = fh;
-    const fctx = full.getContext("2d", { alpha: false });
-    fctx.imageSmoothingEnabled = false;
-    fctx.drawImage(img, 0, 0, fw, fh);
-
-    let cropCanvas = full;
-    if (Array.isArray(rect) && rect.length === 4) {
-      let [rx, ry, rw, rh] = rect.map(Number);
-      rx = Math.max(0, Math.min(fw - 1, Math.floor(rx)));
-      ry = Math.max(0, Math.min(fh - 1, Math.floor(ry)));
-      rw = Math.max(1, Math.min(fw - rx, Math.round(rw)));
-      rh = Math.max(1, Math.min(fh - ry, Math.round(rh)));
-
-      const cx = document.createElement("canvas");
-      cx.width = rw;
-      cx.height = rh;
-      const cctx = cx.getContext("2d", { alpha: false });
-      cctx.imageSmoothingEnabled = false;
-      cctx.drawImage(full, rx, ry, rw, rh, 0, 0, rw, rh);
-      cropCanvas = cx;
-    }
-
-    const blob = await new Promise((res) => cropCanvas.toBlob(res, "image/jpeg", 0.95));
-    if (!blob) throw new Error("Failed to encode crop");
-
-    const reqId = getReqId();
-    if (!reqId) throw new Error("No request id");
-
-    const form = new FormData();
-    form.append("image", blob, "id_back_roi.jpg"); // filename hint; server decides final name
-    const resp = await fetch(
-      `${API_BASE}/upload-id-back-still?req_id=${encodeURIComponent(reqId)}`,
-      { method: "POST", body: form }
-    );
-    const data = await resp.json();
-    if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
-  }
-
   // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
-    h:
-      typeof window !== "undefined"
-        ? window.visualViewport?.height ?? window.innerHeight
-        : 0,
+    h: typeof window !== "undefined" ? window.visualViewport?.height ?? window.innerHeight : 0,
   });
   useEffect(() => {
     const onResize = () =>
@@ -193,7 +89,7 @@ export default function LiveBackIDVerification() {
     return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  // BACKEND-normalized mapping helpers
+  // BACKEND-normalized mapping (for overlay only)
   function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current;
     if (!v || !b || b.length !== 4) return null;
@@ -236,35 +132,12 @@ export default function LiveBackIDVerification() {
     return { x: rectX, y: rectY, w: rectW, h: rectH };
   }
 
+  // ✅ Same constraints style as the front page
   async function getBestStream() {
-    const trials = [
-      {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      },
-      {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      },
-      { video: { facingMode: { ideal: "environment" } }, audio: false },
-    ];
-    let err = null;
-    for (const c of trials) {
-      try {
-        return await navigator.mediaDevices.getUserMedia(c);
-      } catch (e) {
-        err = e;
-      }
-    }
-    throw err || new Error("Camera unavailable");
+    return await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
   }
 
   async function startCamera() {
@@ -285,10 +158,8 @@ export default function LiveBackIDVerification() {
         const [track] = stream.getVideoTracks();
         const caps = track.getCapabilities?.() || {};
         const cons = {};
-        if (caps.focusMode && caps.focusMode.includes("continuous"))
-          cons.focusMode = "continuous";
-        if (caps.exposureMode && caps.exposureMode.includes("continuous"))
-          cons.exposureMode = "continuous";
+        if (caps.focusMode && caps.focusMode.includes("continuous")) cons.focusMode = "continuous";
+        if (caps.exposureMode && caps.exposureMode.includes("continuous")) cons.exposureMode = "continuous";
         if (Object.keys(cons).length) await track.applyConstraints({ advanced: [cons] });
       } catch {}
 
@@ -305,17 +176,11 @@ export default function LiveBackIDVerification() {
       ws.onerror = () => setStatus("WS error");
       ws.onmessage = (evt) => {
         try {
-          const data = JSON.parse(evt.data);
-          setResult(data);
-          if (typeof data?.analyzed_seq === "number") {
-            analyzedSeqRef.current = data.analyzed_seq;
-          }
+          setResult(JSON.parse(evt.data));
         } catch {}
       };
       wsRef.current = ws;
-
-      // capture the stop function so we can freeze at verify
-      sendLoopStopRef.current = startSendingFrames();
+      startSendingFrames();
     } catch (err) {
       console.error(err);
       setStatus(err?.message || "Camera unavailable. Check permissions.");
@@ -324,90 +189,47 @@ export default function LiveBackIDVerification() {
     }
   }
 
-  // send loop (send JSON {seq,img} and buffer each frame)
+  // --- MATCH pacing exactly ---
+  const SEND_FRAME_INTERVAL_MS = 80;
+  const SEND_EVERY_NTH_FRAME = 5;
+
   function startSendingFrames() {
     let stop = false;
-    let sending = false;
-    let lastSentAt = 0;
-    let frameCounter = 0;
-    const TARGET_FPS = 30;
-    const MIN_INTERVAL_MS = Math.floor(1000 / TARGET_FPS);
-    const MAX_BUFFERED = 256 * 1024;
-
     const loop = () => {
       if (stop) return;
-      const v = videoRef.current,
-        ws = wsRef.current;
-      if (!v || !ws || ws.readyState !== WebSocket.OPEN) {
+      const v = videoRef.current, ws = wsRef.current;
+      if (!v || !ws || ws.readyState !== WebSocket.OPEN || !v.videoWidth || !v.videoHeight) {
         requestAnimationFrame(loop);
         return;
       }
 
-      const now = performance.now();
-      frameCounter += 1;
-      const timeOk = now - lastSentAt >= MIN_INTERVAL_MS;
-      const ratioOk = frameCounter % 5 === 0;
-      if (!timeOk && !ratioOk) {
-        requestAnimationFrame(loop);
-        return;
+      // Send FULL sensor frame to analyzer (no display scaling)
+      const canvas = document.createElement("canvas");
+      canvas.width = v.videoWidth;
+      canvas.height = v.videoHeight;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+
+      sendTickRef.current = (sendTickRef.current + 1) % SEND_EVERY_NTH_FRAME;
+      if (sendTickRef.current === 0) {
+        const b64 = canvas.toDataURL("image/jpeg", 0.7).split(",")[1];
+        if (b64) { try { ws.send(b64); } catch {} }
       }
 
-      if (sending) {
-        requestAnimationFrame(loop);
-        return;
-      }
-      if (ws.bufferedAmount > MAX_BUFFERED) {
-        requestAnimationFrame(loop);
-        return;
-      }
-      if (!(v.videoWidth && v.videoHeight)) {
-        requestAnimationFrame(loop);
-        return;
-      }
-
-      sending = true;
-      try {
-        const maxW = 960;
-        const scale = Math.min(1, maxW / v.videoWidth);
-        const W = Math.round(v.videoWidth * scale);
-        const H = Math.round(v.videoHeight * scale);
-
-        const canvas = document.createElement("canvas");
-        canvas.width = W;
-        canvas.height = H;
-        const ctx = canvas.getContext("2d", { alpha: false });
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(v, 0, 0, W, H);
-        const b64 = canvas.toDataURL("image/jpeg", 0.6).split(",")[1];
-        if (b64) {
-          const seq = ++seqRef.current;
-          bufferPut(seq, b64, W, H);
-          try {
-            ws.send(JSON.stringify({ seq, img: b64 }));
-            lastSentAt = now;
-          } catch {}
-        }
-      } finally {
-        sending = false;
-        setTimeout(() => requestAnimationFrame(loop), 16);
-      }
+      setTimeout(() => requestAnimationFrame(loop), SEND_FRAME_INTERVAL_MS);
     };
-
     requestAnimationFrame(loop);
-    return () => {
-      stop = true;
-    };
+    return () => { stop = true; };
   }
 
-  // AUTO-CAPTURE when gates pass (NO face check for back)
+  // AUTO-CAPTURE when all gates pass (NO face gate on back)
   useEffect(() => {
     const allGreen =
       !!result &&
-      result.skipped !== true &&          // NEW: ignore heartbeat payloads
+      result.brightness_ok === true &&
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
-      result.face_on_id === true &&
       result.ocr_ok === true;
 
     if (cameraOn && allGreen && !isUploading && !autoCapturedRef.current) {
@@ -416,140 +238,58 @@ export default function LiveBackIDVerification() {
     }
   }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ⬇️ FINAL CAPTURE: upload FULL frame (not ROI)
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
-
-      // Freeze sending as soon as we decide to capture
-      try {
-        sendLoopStopRef.current?.();
-      } catch {}
-      sendLoopStopRef.current = null;
-
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
-
-      // Prefer exact analyzed frame via buffer (if backend echoed analyzed_seq)
-      const analyzedSeq =
-        typeof analyzedSeqRef.current === "number" ? analyzedSeqRef.current : null;
-      const analyzedEntry = analyzedSeq ? bufferGet(analyzedSeq) : null;
-
-      if (analyzedEntry && Array.isArray(result?.rect)) {
-        await uploadBackCroppedFromB64(
-          analyzedEntry.b64,
-          analyzedEntry.w,
-          analyzedEntry.h,
-          result.rect
-        );
-
-        // cleanup identical to front flow
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          try {
-            wsRef.current.close();
-          } catch {}
-        }
-        wsRef.current = null;
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
-        if (videoRef.current) {
-          try {
-            videoRef.current.pause();
-          } catch {}
-          videoRef.current.srcObject = null;
-        }
-        navigate("/", { replace: true });
-        return;
-      }
-
-      // Fallback: capture from live <video> using screen→video mapping
       const v = videoRef.current;
 
-      const fw = result?.frame_w,
-        fh = result?.frame_h;
-      if (!fw || !fh) throw new Error("No backend frame size.");
+      const FW = v.videoWidth, FH = v.videoHeight;
+      if (!FW || !FH) throw new Error("Camera not ready");
 
-      const guideOnScreen = guideRect;
-      if (!guideOnScreen) throw new Error("Guide not ready");
-
-      const { x, y, w, h } = mapScreenRectToVideoRect(
-        guideOnScreen.x,
-        guideOnScreen.y,
-        guideOnScreen.w,
-        guideOnScreen.h
-      );
-      if (!(w > 0 && h > 0)) throw new Error("Camera not ready");
-
-      const full = document.createElement("canvas");
-      full.width = v.videoWidth;
-      full.height = v.videoHeight;
-      const fctx = full.getContext("2d", { alpha: false });
+      const fullCanvas = document.createElement("canvas");
+      fullCanvas.width = FW;
+      fullCanvas.height = FH;
+      const fctx = fullCanvas.getContext("2d", { alpha: false });
       fctx.imageSmoothingEnabled = false;
-      fctx.drawImage(v, 0, 0, full.width, full.height);
+      fctx.drawImage(v, 0, 0, FW, FH);
 
-      const crop = document.createElement("canvas");
-      crop.width = w;
-      crop.height = h;
-      const cctx = crop.getContext("2d", { alpha: false });
-      cctx.imageSmoothingEnabled = false;
-      cctx.drawImage(full, x, y, w, h, 0, 0, w, h);
-
-      const blob = await new Promise((res) => crop.toBlob(res, "image/jpeg", 0.95));
+      const blob = await new Promise((res) => fullCanvas.toBlob(res, "image/jpeg", 0.95));
       const form = new FormData();
-      form.append("image", blob, "id_back_roi.jpg");
+      form.append("image", blob, "id_back_full.jpg");
 
-      const resp = await fetch(
-        `${API_BASE}/upload-id-back-still?req_id=${encodeURIComponent(reqId)}`,
-        { method: "POST", body: form }
-      );
+      const resp = await fetch(`${API_BASE}/upload-id-back-still?req_id=${encodeURIComponent(reqId)}`, {
+        method: "POST",
+        body: form,
+      });
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // cleanup
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        try {
-          wsRef.current.close();
-        } catch {}
-      }
+      // Teardown
+      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
       wsRef.current = null;
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-        } catch {}
+        try { videoRef.current.pause(); } catch {}
         videoRef.current.srcObject = null;
       }
       navigate("/", { replace: true });
     } catch (e) {
       console.error(e);
       alert(e.message || "Capture failed");
-      autoCapturedRef.current = false; // allow retry
+      autoCapturedRef.current = false;
     } finally {
       setIsUploading(false);
     }
   }
 
-  // screen→video mapping for fallback capture
-  function mapScreenRectToVideoRect(sx, sy, sw, sh) {
-    const v = videoRef.current;
-    if (!v) return null;
-    const geo = currentDisplayRect();
-    if (!geo) return null;
-    const { vw, vh, dx, dy, dispW, dispH } = geo;
-    const x1 = Math.max(0, Math.min(vw, ((sx - dx) / dispW) * vw));
-    const y1 = Math.max(0, Math.min(vh, ((sy - dy) / dispH) * vh));
-    const x2 = Math.max(0, Math.min(vw, (((sx + sw) - dx) / dispW) * vw));
-    const y2 = Math.max(0, Math.min(vh, (((sy + sh) - dy) / dispH) * vh));
-    const w = Math.max(1, Math.round(x2 - x1));
-    const h = Math.max(1, Math.round(y2 - y1));
-    return { x: Math.round(x1), y: Math.round(y1), w, h };
-  }
-
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
@@ -559,26 +299,27 @@ export default function LiveBackIDVerification() {
         streamRef.current = null;
       }
       if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-        } catch {}
+        try { videoRef.current.pause(); } catch {}
         videoRef.current.srcObject = null;
       }
       startedRef.current = false;
       autoCapturedRef.current = false;
       setCameraOn(false);
-      try {
-        sendLoopStopRef.current?.();
-      } catch {}
-      sendLoopStopRef.current = null;
     };
   }, []);
 
-  // --- Guidance (no face requirement on back) ---
   const guidance = (() => {
     if (!cameraOn) return "Tap “Start Camera” to begin.";
     if (!result) return "Connecting…";
-    if (!result.id_card_detected) return "📇 Place the BACK of your ID in view.";
+
+    // brightness first
+    if (result.brightness_ok === false) {
+      if (result.brightness_status === "dark") return "💡 Increase lighting on the ID.";
+      if (result.brightness_status === "bright") return "✨ Reduce glare or move away from direct light.";
+      return "💡 Adjust lighting.";
+    }
+
+    if (!result.id_card_detected) return "📇 Place the ID card in view.";
     if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
     if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
     if (!result.ocr_ok) return "🔎 Hold steady—text unclear.";
@@ -586,18 +327,13 @@ export default function LiveBackIDVerification() {
   })();
 
   // Overlay geometry
-  const fw = result?.frame_w,
-    fh = result?.frame_h;
-  const backendGuide =
-    result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
+  const fw = result?.frame_w, fh = result?.frame_h;
+  const backendGuide = result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
   const guideRect = backendGuide || localGuideRect();
 
-  const idCardBox =
-    result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
+  const idCardBox = result?.id_card_bbox && fw && fh ? mapBoxToScreen(result.id_card_bbox, fw, fh) : null;
 
-  // OCR metrics (debug line)
-  const fmt = (v, d = 2) =>
-    typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—";
+  const fmt = (v, d = 2) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
   const metricsText =
     result && idCardBox
       ? [
@@ -612,10 +348,7 @@ export default function LiveBackIDVerification() {
       : null;
 
   return (
-    <div
-      className="position-relative"
-      style={{ width: "100vw", height: "100dvh", overflow: "hidden", background: "#000" }}
-    >
+    <div className="position-relative" style={{ width: "100vw", height: "100dvh", overflow: "hidden", background: "#000" }}>
       <video
         ref={videoRef}
         autoPlay
@@ -626,36 +359,14 @@ export default function LiveBackIDVerification() {
 
       {cameraOn && guideRect && (
         <>
-          <svg
-            width={vp.w}
-            height={vp.h}
-            viewBox={`0 0 ${vp.w} ${vp.h}`}
-            style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
-          >
+          <svg width={vp.w} height={vp.h} viewBox={`0 0 ${vp.w} ${vp.h}`} style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
             <defs>
               <mask id="rect-cutout">
                 <rect x="0" y="0" width={vp.w} height={vp.h} fill="white" />
-                <rect
-                  x={guideRect.x}
-                  y={guideRect.y}
-                  width={guideRect.w}
-                  height={guideRect.h}
-                  rx="12"
-                  ry="12"
-                  fill="black"
-                />
+                <rect x={guideRect.x} y={guideRect.y} width={guideRect.w} height={guideRect.h} rx="12" ry="12" fill="black" />
               </mask>
             </defs>
-            {/* dim outside guide */}
-            <rect
-              x="0"
-              y="0"
-              width={vp.w}
-              height={vp.h}
-              fill="rgba(0,0,0,0.55)"
-              mask="url(#rect-cutout)"
-            />
-            {/* guide outline */}
+            <rect x="0" y="0" width={vp.w} height={vp.h} fill="rgba(0,0,0,0.55)" mask="url(#rect-cutout)" />
             <rect
               x={guideRect.x}
               y={guideRect.y}
@@ -668,7 +379,6 @@ export default function LiveBackIDVerification() {
               strokeWidth="3"
               strokeDasharray="6 6"
             />
-            {/* ID bbox */}
             {idCardBox && (
               <rect
                 x={idCardBox.x}
@@ -682,7 +392,6 @@ export default function LiveBackIDVerification() {
             )}
           </svg>
 
-          {/* OCR metrics panel */}
           {metricsText && idCardBox && (
             <div
               style={{
@@ -702,7 +411,6 @@ export default function LiveBackIDVerification() {
             </div>
           )}
 
-          {/* Verified badge */}
           {result?.verified && idCardBox && (
             <div
               style={{
@@ -724,11 +432,11 @@ export default function LiveBackIDVerification() {
         </>
       )}
 
-      {/* Guidance banner */}
+      {/* Raise banner a bit to avoid overlap */}
       {cameraOn && guideRect && (
         <div
           className="position-absolute w-100 d-flex justify-content-center"
-          style={{ top: Math.max(8, guideRect.y - 16), left: 0, padding: "0 16px" }}
+          style={{ top: Math.max(8, guideRect.y - 48), left: 0, padding: "0 16px" }}
         >
           <div
             style={{
@@ -748,7 +456,6 @@ export default function LiveBackIDVerification() {
         </div>
       )}
 
-      {/* Start Camera button */}
       {!cameraOn && (
         <div className="position-absolute w-100 d-flex justify-content-center" style={{ bottom: 32, left: 0 }}>
           <button className="btn btn-primary" onClick={startCamera}>
@@ -757,21 +464,9 @@ export default function LiveBackIDVerification() {
         </div>
       )}
 
-      {/* Bottom status */}
       {cameraOn && (
-        <div
-          className="position-absolute w-100 d-flex flex-column align-items-center"
-          style={{ bottom: 24, left: 0, gap: 8 }}
-        >
-          <div
-            className="text-light text-center"
-            style={{
-              background: "rgba(0,0,0,0.35)",
-              borderRadius: 12,
-              padding: "6px 10px",
-              fontSize: 12,
-            }}
-          >
+        <div className="position-absolute w-100 d-flex flex-column align-items-center" style={{ bottom: 24, left: 0, gap: 8 }}>
+          <div className="text-light text-center" style={{ background: "rgba(0,0,0,0.35)", borderRadius: 12, padding: "6px 10px", fontSize: 12 }}>
             {status}
           </div>
         </div>
