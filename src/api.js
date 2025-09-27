@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://provided-murphy-forest-signals.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://7d2dreh020kqhx-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
