@@ -569,6 +569,9 @@ function LiveVerification() {
       uploadingRef.current = true;
       hasUploadedRef.current = true;
 
+      // Clear the countdown timer since recording is complete and upload is starting
+      clearTimers();
+      
       setIsProcessing(true);
       await uploadSingle(blob);
       // overlay remains until navigation
@@ -761,7 +764,8 @@ function LiveVerification() {
         </div>
       </div>
 
-      {remainingSec != null && (
+      {/* Only show countdown timer if recording hasn't completed yet */}
+      {remainingSec != null && !isProcessing && (
         <div className="position-absolute" style={{ top: 16, right: 16 }}>
           <div style={{ background: "rgba(0,0,0,0.6)", color: "#fff", borderRadius: 999, padding: "6px 12px", fontSize: 14 }}>
             Session ends in <strong>{remainingSec}s</strong>
