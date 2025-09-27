@@ -319,16 +319,16 @@ export default function LiveIDBackVerification() {
 
     // brightness first
     if (result.brightness_ok === false) {
-      if (result.brightness_status === "dark") return "💡 Increase lighting on the ID.";
-      if (result.brightness_status === "bright") return "✨ Reduce glare or move away from direct light.";
+      if (result.brightness_status === "dark") return "Lighting too low — move to a brighter place";
+      if (result.brightness_status === "bright") return "Lighting too strong — reduce direct light";
       return "💡 Adjust lighting.";
     }
 
-    if (!result.id_card_detected) return "📇 Place the ID card in view.";
-    if (!result.id_overlap_ok) return "📐 Move ID fully into the box.";
-    if (!result.id_size_ok) return "↔️ Move closer so the ID fills the box.";
-    if (!result.ocr_ok) return "🔎 Hold steady—text unclear.";
-    return "✅ Perfect. Capturing…";
+    if (!result.id_card_detected) return "Please hold your ID card within the camera view";
+    if (!result.id_overlap_ok) return "Position your ID card completely within the box.";
+    if (!result.id_size_ok) return "Move your ID card closer to fill more of the box";
+    if (!result.ocr_ok) return "Hold your ID card steady while the text is being read";
+    return "Perfect positioning detected. Capturing your ID now";
   })();
 
   // Overlay geometry
