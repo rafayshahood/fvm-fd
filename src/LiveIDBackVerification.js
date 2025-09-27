@@ -243,6 +243,13 @@ export default function LiveIDBackVerification() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
+      
+      // Stop all detection and frame analysis since capture is complete
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        try { wsRef.current.close(); } catch {}
+      }
+      wsRef.current = null;
+      
       const reqId = getReqId();
       if (!reqId) throw new Error("No request id. Refresh the page.");
       const v = videoRef.current;
@@ -268,9 +275,7 @@ export default function LiveIDBackVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // Teardown
-      if (wsRef.current?.readyState === WebSocket.OPEN) { try { wsRef.current.close(); } catch {} }
-      wsRef.current = null;
+      // Final teardown and navigation
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -309,7 +314,7 @@ export default function LiveIDBackVerification() {
   }, []);
 
   const guidance = (() => {
-    if (!cameraOn) return "Tap “Start Camera” to begin.";
+    if (!cameraOn) return "Tap "Start Camera" to begin.";
     if (!result) return "Connecting…";
 
     // brightness first
