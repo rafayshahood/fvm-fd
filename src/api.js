@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://sporting-walk-pie-orbit.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://provided-murphy-forest-signals.trycloudflare.com';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:

@@ -314,7 +314,7 @@ export default function LiveIDBackVerification() {
   }, []);
 
   const guidance = (() => {
-    if (!cameraOn) return "Tap "Start Camera" to begin.";
+    if (!cameraOn) return "Tap Start Camera to begin.";
     if (!result) return "Connecting…";
 
     // brightness first
