@@ -1,7 +1,4 @@
-// LiveIDBackVerification.jsx — viewport-sized streaming & capture (BACK side)
-// WS frames are full-sensor; final upload is the FULL frame (no ROI crop).
-// Brightness gate first. No face checks on the back side.
-
+// LiveIDBackVerification.jsx — QR code detection for ID back
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE, WS_BASE } from "./api";
@@ -52,7 +49,6 @@ export default function LiveIDBackVerification() {
   const [isUploading, setIsUploading] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
 
-  // ---- VIEWPORT / OVERLAY ----
   const [vp, setVp] = useState({
     w: typeof window !== "undefined" ? window.innerWidth : 0,
     h: typeof window !== "undefined" ? window.visualViewport?.height ?? window.innerHeight : 0,
@@ -89,7 +85,6 @@ export default function LiveIDBackVerification() {
     return { scale, dx, dy, dispW, dispH, vw, vh };
   }
 
-  // BACKEND-normalized mapping (for overlay only)
   function mapBoxToScreen(b, fw, fh) {
     const v = videoRef.current;
     if (!v || !b || b.length !== 4) return null;
@@ -120,19 +115,17 @@ export default function LiveIDBackVerification() {
     };
   }
 
-  // Local placeholder guide (shown immediately on camera start)
   function localGuideRect() {
     const geo = currentDisplayRect();
     if (!geo) return null;
     const { dx, dy, dispW, dispH } = geo;
-    const rectW = dispW * 0.95; // must match backend RECT_W_RATIO
-    const rectH = dispH * 0.45; // must match backend RECT_H_RATIO
+    const rectW = dispW * 0.95;
+    const rectH = dispH * 0.45;
     const rectX = dx + (dispW - rectW) / 2;
     const rectY = dy + (dispH - rectH) / 2;
     return { x: rectX, y: rectY, w: rectW, h: rectH };
   }
 
-  // ✅ Same constraints style as the front page
   async function getBestStream() {
     return await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
@@ -189,7 +182,6 @@ export default function LiveIDBackVerification() {
     }
   }
 
-  // --- MATCH pacing exactly ---
   const SEND_FRAME_INTERVAL_MS = 80;
   const SEND_EVERY_NTH_FRAME = 5;
 
@@ -203,7 +195,6 @@ export default function LiveIDBackVerification() {
         return;
       }
 
-      // Send FULL sensor frame to analyzer (no display scaling)
       const canvas = document.createElement("canvas");
       canvas.width = v.videoWidth;
       canvas.height = v.videoHeight;
@@ -222,7 +213,6 @@ export default function LiveIDBackVerification() {
     return () => { stop = true; };
   }
 
-  // AUTO-CAPTURE when all gates pass (NO face gate on back)
   useEffect(() => {
     const allGreen =
       !!result &&
@@ -230,21 +220,19 @@ export default function LiveIDBackVerification() {
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
-      result.ocr_ok === true;
+      result.qr_detected === true;
 
     if (cameraOn && allGreen && !isUploading && !autoCapturedRef.current) {
       autoCapturedRef.current = true;
       handleCapture();
     }
-  }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [cameraOn, result, isUploading]);
 
-  // ⬇️ FINAL CAPTURE: upload FULL frame (not ROI)
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
       setIsUploading(true);
       
-      // Stop all detection and frame analysis since capture is complete
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         try { wsRef.current.close(); } catch {}
       }
@@ -275,7 +263,6 @@ export default function LiveIDBackVerification() {
       const data = await resp.json();
       if (!resp.ok || !data?.ok) throw new Error(data?.error || "Upload failed");
 
-      // Final teardown and navigation
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -294,7 +281,6 @@ export default function LiveIDBackVerification() {
     }
   }
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.close();
@@ -317,21 +303,19 @@ export default function LiveIDBackVerification() {
     if (!cameraOn) return "Tap Start Camera to begin.";
     if (!result) return "Connecting…";
 
-    // brightness first
     if (result.brightness_ok === false) {
       if (result.brightness_status === "dark") return "Lighting too low — move to a brighter place";
       if (result.brightness_status === "bright") return "Lighting too strong — reduce direct light";
-      return "💡 Adjust lighting.";
+      return "Adjust lighting.";
     }
 
     if (!result.id_card_detected) return "Please hold your ID card within the camera view";
     if (!result.id_overlap_ok) return "Position your ID card completely within the box.";
     if (!result.id_size_ok) return "Move your ID card closer to fill more of the box";
-    if (!result.ocr_ok) return "Hold your ID card steady while the text is being read";
-    return "Perfect positioning detected. Capturing your ID now";
+    if (!result.qr_detected) return "Hold steady — scanning for QR code";
+    return "QR code detected! Capturing now…";
   })();
 
-  // Overlay geometry
   const fw = result?.frame_w, fh = result?.frame_h;
   const backendGuide = result?.rect && fw && fh ? mapRectToScreenRect(result.rect, fw, fh) : null;
   const guideRect = backendGuide || localGuideRect();
@@ -346,9 +330,7 @@ export default function LiveIDBackVerification() {
           `ar ${fmt(result.id_ar)}`,
           `in ${fmt(result.id_frac_in)}`,
           `size ${fmt(result.id_size_ratio)}`,
-          `txt_in ${fmt(result.ocr_inside_ratio)}`,
-          `hits ${result.ocr_hits ?? "—"}`,
-          `conf ${fmt(result.ocr_mean_conf)}`,
+          `qr ${result.qr_detected ? "✓" : "✗"}`,
         ].join(" | ")
       : null;
 
@@ -431,13 +413,12 @@ export default function LiveIDBackVerification() {
                 pointerEvents: "none",
               }}
             >
-              ID BACK VERIFIED (OCR)
+              ID BACK VERIFIED (QR)
             </div>
           )}
         </>
       )}
 
-      {/* Raise banner a bit to avoid overlap */}
       {cameraOn && guideRect && (
         <div
           className="position-absolute w-100 d-flex justify-content-center"
