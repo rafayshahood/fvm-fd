@@ -327,7 +327,6 @@ export default function LiveIDBackVerification() {
     result && idCardBox
       ? [
           `conf ${fmt(result.id_card_conf)}`,
-          `ar ${fmt(result.id_ar)}`,
           `in ${fmt(result.id_frac_in)}`,
           `size ${fmt(result.id_size_ratio)}`,
           `qr ${result.qr_detected ? "✓" : "✗"}`,
