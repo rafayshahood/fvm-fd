@@ -192,7 +192,7 @@ export default function LiveIDVerification() {
 
   // --- MATCH LiveVerification pacing exactly ---
   const SEND_FRAME_INTERVAL_MS = 80;
-  const SEND_EVERY_NTH_FRAME = 3;
+  const SEND_EVERY_NTH_FRAME = 5;
 
   function startSendingFrames() {
     let stop = false;
