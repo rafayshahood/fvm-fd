@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://oqip6zjgnevvrp-8888.proxy.runpod.net';
+const RUNPOD_DEFAULT = 'https://5szo79l1fcslv3-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
