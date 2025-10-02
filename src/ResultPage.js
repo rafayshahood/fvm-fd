@@ -34,7 +34,8 @@ function ResultPage() {
 
   const applyAssetUrls = (bundle) => {
     if (!bundle) return;
-    const idUrl = abs(bundle.id_image_url) || abs(bundle.cropped_face_url) || null;
+    // PRIORITY: Use id_crop_url (new detected region), fallback to cropped face, then full ID
+    const idUrl = abs(bundle.id_crop_url) || abs(bundle.cropped_face_url) || abs(bundle.id_image_url) || null;
     const vidUrl = abs(bundle.video_url) || null;
     setIdImgSrc(idUrl);
     setVideoSrc(vidUrl);
@@ -60,8 +61,9 @@ function ResultPage() {
             setResult(data);
             setError(null);
             applyAssetUrls({
-              id_image_url: data?.id_image_url,
+              id_crop_url: data?.id_crop_url,
               cropped_face_url: data?.cropped_face_url,
+              id_image_url: data?.id_image_url,
               video_url: data?.video_url,
             });
             const df = {
@@ -191,9 +193,20 @@ function ResultPage() {
   })();
 
   const onIdImgError = () => {
-    const fallback = `${API_BASE}/temp/${effectiveReqId}/id/cropped_id_face.jpg`;
-    if (idImgSrc !== fallback) setIdImgSrc(fallback);
+    // Fallback chain: id_crop -> cropped_face -> full frame
+    const fallback1 = `${API_BASE}/temp/${effectiveReqId}/id/cropped_id_face.jpg`;
+    const fallback2 = `${API_BASE}/temp/${effectiveReqId}/id/id_frame_enhanced.jpg`;
+    const fallback3 = `${API_BASE}/temp/${effectiveReqId}/id/id_frame_raw.jpg`;
+    
+    if (idImgSrc?.includes('id_crop_raw.jpg')) {
+      setIdImgSrc(fallback1);
+    } else if (idImgSrc === fallback1) {
+      setIdImgSrc(fallback2);
+    } else if (idImgSrc === fallback2) {
+      setIdImgSrc(fallback3);
+    }
   };
+  
   const onVideoError = () => setShowVideo(false);
 
   const renderDeepfakeBlock = () => {
@@ -297,9 +310,9 @@ function ResultPage() {
               {renderDeepfakeBlock()}
               <div className="row mt-3">
                 <div className="col-md-6 mb-3">
-                  <h6>ID Image</h6>
+                  <h6>ID Image (Detected Region)</h6>
                   {idImgSrc ? (
-                    <img src={idImgSrc} alt="ID / Cropped Face" className="img-fluid border" onError={onIdImgError}/>
+                    <img src={idImgSrc} alt="ID Detected Region" className="img-fluid border" onError={onIdImgError}/>
                   ) : (<div className="text-muted small">(ID image unavailable)</div>)}
                 </div>
                 <div className="col-md-6 mb-3">
