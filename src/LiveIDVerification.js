@@ -1,6 +1,5 @@
 // LiveIDVerification.jsx — viewport-sized streaming & capture
-// Matches LiveVerification pacing; WS frames are full-sensor;
-// final upload is the FULL frame (no ROI crop).
+// Uploads FULL frame + CROPPED ID region to backend
 // Now includes BRIGHTNESS gate as the first check.
 
 import React, { useEffect, useRef, useState } from "react";
@@ -133,7 +132,6 @@ export default function LiveIDVerification() {
     return { x: rectX, y: rectY, w: rectW, h: rectH };
   }
 
-  // ✅ Same constraints style as video page
   async function getBestStream() {
     return await navigator.mediaDevices.getUserMedia({
       video: { facingMode: { ideal: "environment" } },
@@ -227,7 +225,7 @@ export default function LiveIDVerification() {
   useEffect(() => {
     const allGreen =
       !!result &&
-      result.brightness_ok === true &&                  // ⬅️ new: brightness first
+      result.brightness_ok === true &&
       result.id_card_detected === true &&
       result.id_overlap_ok === true &&
       result.id_size_ok === true &&
@@ -240,7 +238,7 @@ export default function LiveIDVerification() {
     }
   }, [cameraOn, result, isUploading]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ⬇️ FINAL CAPTURE: upload FULL frame (not ROI)
+  // FINAL CAPTURE: upload FULL frame + CROPPED ID region
   async function handleCapture() {
     if (isUploading || !videoRef.current) return;
     try {
@@ -259,6 +257,7 @@ export default function LiveIDVerification() {
       const FW = v.videoWidth, FH = v.videoHeight;
       if (!FW || !FH) throw new Error("Camera not ready");
 
+      // 1. Full frame canvas
       const fullCanvas = document.createElement("canvas");
       fullCanvas.width = FW;
       fullCanvas.height = FH;
@@ -266,9 +265,40 @@ export default function LiveIDVerification() {
       fctx.imageSmoothingEnabled = false;
       fctx.drawImage(v, 0, 0, FW, FH);
 
-      const blob = await new Promise((res) => fullCanvas.toBlob(res, "image/jpeg", 0.95));
+      const fullBlob = await new Promise((res) => fullCanvas.toBlob(res, "image/jpeg", 0.95));
+
+      // 2. Crop ID region if bbox available
+      let idCropBlob = null;
+      if (result?.id_card_bbox && result?.frame_w && result?.frame_h) {
+        const [x1, y1, x2, y2] = result.id_card_bbox;
+        const fw = result.frame_w, fh = result.frame_h;
+        
+        // Map bbox from analyzer frame coords to video coords
+        const vx1 = Math.round((x1 / fw) * FW);
+        const vy1 = Math.round((y1 / fh) * FH);
+        const vx2 = Math.round((x2 / fw) * FW);
+        const vy2 = Math.round((y2 / fh) * FH);
+        
+        const cropW = vx2 - vx1;
+        const cropH = vy2 - vy1;
+        
+        if (cropW > 0 && cropH > 0) {
+          const cropCanvas = document.createElement("canvas");
+          cropCanvas.width = cropW;
+          cropCanvas.height = cropH;
+          const cctx = cropCanvas.getContext("2d", { alpha: false });
+          cctx.imageSmoothingEnabled = false;
+          cctx.drawImage(v, vx1, vy1, cropW, cropH, 0, 0, cropW, cropH);
+          idCropBlob = await new Promise((res) => cropCanvas.toBlob(res, "image/jpeg", 0.95));
+        }
+      }
+
+      // 3. Upload both
       const form = new FormData();
-      form.append("image", blob, "id_full.jpg");
+      form.append("image", fullBlob, "id_full.jpg");
+      if (idCropBlob) {
+        form.append("id_crop", idCropBlob, "id_crop.jpg");
+      }
 
       const resp = await fetch(`${API_BASE}/upload-id-still?req_id=${encodeURIComponent(reqId)}`, {
         method: "POST",
@@ -318,7 +348,6 @@ export default function LiveIDVerification() {
     if (!cameraOn) return "Tap Start Camera to begin.";
     if (!result) return "Connecting…";
 
-    // ⬇️ brightness first
     if (result.brightness_ok === false) {
       if (result.brightness_status === "dark") return "💡 Increase lighting on the ID.";
       if (result.brightness_status === "bright") return "✨ Reduce glare or move away from direct light.";
@@ -441,7 +470,6 @@ export default function LiveIDVerification() {
         </>
       )}
 
-      {/* Raise banner a bit to avoid overlap */}
       {cameraOn && guideRect && (
         <div
           className="position-absolute w-100 d-flex justify-content-center"
