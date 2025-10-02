@@ -1,5 +1,5 @@
 // api.js
-const RUNPOD_DEFAULT = 'https://font-chelsea-priest-designing.trycloudflare.com';
+const RUNPOD_DEFAULT = 'https://ejknc3684iiaat-8888.proxy.runpod.net';
 const LOCAL_DEFAULT  = 'http://localhost:8888';
 
 // Priority:
